@@ -21,7 +21,12 @@ Fechar decisões fundamentadas no código real e entregar cinco artefatos: Curre
 
 ## Decisions so far
 
-<!-- Um resumo e link por ticket resolvido. A resposta completa vive somente no ticket. -->
+- [Quais padrões multi-client do T3 Code são comprovados pelo código?](issues/02-t3-architecture.md): UI Web compartilhada e conexão por ambiente são comprovadas; copiar o código também traz o acoplamento a Effect.
+- [O que torna Projects e Threads do T3 Code simples de navegar?](issues/03-t3-explorer.md): A árvore Project → Threads está no modo legado; a sidebar padrão atual agrupa por ciclo de vida e mantém referências por ambiente.
+- [Quais limites do Dockview precisam ser validados com Lit?](issues/05-dockview.md): Integração vanilla disponível; reparenting, lifecycle de componentes e popouts exigem protótipo antes da escolha.
+- [Quais restrições de Electron e Tauri importam para o Desktop Linux?](issues/06-desktop.md): Electron segue candidato inicial; runtime embarcado, dependências nativas e sobrevivência de sessiond precisam de validação empacotada.
+- [Quais diferenças reais entre Pi e OMP condicionam a integração futura?](issues/04-pi-omp.md): Bun, APIs de sessão, credenciais e UI do host exigem integração explícita; nomes e JSONL v3 não provam compatibilidade.
+- [O que o PI WEB já resolve e onde estão seus acoplamentos?](issues/01-pi-web.md): Web/API e sessiond têm lifecycles separados; backend/plugins são reutilizáveis, mas estado do shell e integração Pi ainda exigem interfaces explícitas.
 
 ## Not yet specified
 
