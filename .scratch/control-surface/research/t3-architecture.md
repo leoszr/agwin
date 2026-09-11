@@ -6,8 +6,10 @@ Revisão consultada: `pingdotgg/t3code` @ `7bd7f99e6cab940892ff9240549c507bfd066
 Leitura direta do código (clone readonly fora da worktree); sem execução visual ou build —
 nenhuma afirmação abaixo depende de runtime observado.
 
-URLs permanentes usam `?plain=1` na revisão fixada, ex.:
-`https://github.com/pingdotgg/t3code/blob/7bd7f99e6cab940892ff9240549c507bfd066aee/packages/contracts/src/rpc.ts?plain=1`
+Caminhos citados são relativos à raiz do repositório nessa revisão; qualquer um
+resolve à URL permanente trocando o sufixo após o SHA, ex. para
+`packages/client-runtime/src/connection/supervisor.ts`:
+`https://github.com/pingdotgg/t3code/blob/7bd7f99e6cab940892ff9240549c507bfd066aee/packages/client-runtime/src/connection/supervisor.ts?plain=1`
 
 ## 1. Estrutura real e divergências do brief
 
@@ -22,13 +24,17 @@ O brief (§2, Etapa B) hipotetizava `apps/{web,desktop,mobile,server}` e
   `@t3tools/web 0.0.40` e `@t3tools/desktop 0.0.40`
   (`apps/*/package.json`); mobile está em `0.0.0` (não versionado junto).
 - Stack: `effect 4.0.0-rc.112` (RC, catálogo `pnpm-workspace.yaml:50`), TypeScript/Node ≥ 24,
-  React 19 no web, Electron 44 no desktop. Todo o protocolo e o runtime são
-  construídos sobre **Effect** (`effect/Schema`, `effect/unstable/rpc/*`,
-  `effect/unstable/reactivity` Atoms). Esse acoplamento é o principal custo de
-  transplante (ver §9).
+  Electron 44 no desktop. Protocolo, servidor e `client-runtime` são construídos
+  sobre **Effect** (`effect/Schema`, `effect/unstable/rpc/*`,
+  `effect/unstable/reactivity` Atoms) — dependência direta desses pacotes,
+  verificada em `package.json`/imports. React 19 + `@effect/atom-react` pertencem
+  ao consumidor web (`apps/web/package.json:22,45`); `packages/client-runtime`
+  não importa React (grep em `src/` e `package.json` retorna vazio). Esse
+  acoplamento ao Effect é o principal custo de transplante (ver §4).
 - Licença: **MIT**, © 2026 T3 Tools Inc. (`LICENSE`, raiz). Permite usar, copiar,
-  modificar, mesclar, publicar, distribuir, sublicenciar e vender, exigindo apenas
-  preservar o aviso de copyright. Sem copyleft; sem obrigação de abrir o derivado.
+  modificar, mesclar, publicar, distribuir, sublicenciar e vender, exigindo
+  preservar o aviso de copyright **e** o aviso de permissão/licença em todas as
+  cópias ou porções substanciais. Sem copyleft; sem obrigação de abrir o derivado.
   Ressalvas: `apps/web/THIRD_PARTY_NOTICES.md` (dependências do bundle web),
   `native/libghostty-vt/LICENSE` (licença própria do componente nativo de terminal) e
   marca/produto (`productName: "T3 Code (Alpha)"` em `apps/desktop/package.json`) —
@@ -61,12 +67,13 @@ tri-client, não promessa):
 Direção de dependência (README, `Dependency direction`): aplicações provêm
 serviços `platform`; `connection` compõe `platform` + `authorization` + `relay` +
 `rpc` para supervisionar sessões por environment; módulos `state` consomem o
-registry e expõem estado/Atoms. Ou seja: **views nunca tocam rede; o runtime
-central possui conexão e estado; a plataforma injeta o que é nativo**.
+registry e expõem estado/Atoms. Leitura arquitetural (direção documentada, não
+inventário exaustivo de imports): views consomem registry/estado, e a rede direta
+vive em `connection`/`rpc`, com o nativo injetado pela plataforma.
 
 ### B2. O que pertence ao servidor?
 
-Tudo que executa ou persiste (`apps/server/src/`): sessões/turnos de providers e
+Toda a execução de agentes e a persistência de domínio server-side (`apps/server/src/`): sessões/turnos de providers e
 seus drivers (`provider/Drivers/`, `Layers/`, `Services/`), orquestração de
 threads/shells, terminais (`terminal/Manager.ts`, adaptadores pty `BunPtyAdapter`/
 `NodePtyAdapter`), git/VCS e worktrees (`vcs/`, `git/`), arquivos e projetos
@@ -75,6 +82,9 @@ pull-requests, medição de uso, auth/emissão de tokens, auto-update, escaneame
 de sessões de agentes. O servidor também **serve o bundle web estático**
 (`apps/server/src/http.ts:456-532`, `staticDir` + `manifest.json`, fallback a
 `index.html`) — fato que sustenta B5.
+Qualificação: "server-side" acima exclui a persistência client-side de cache e
+catálogo (snapshots e `ConnectionRegistrationStore`, ver B3) — o servidor detém
+execução e fonte autoritativa, não toda bytes persistidos do sistema.
 
 ### B3. O que pertence ao client-runtime?
 
@@ -252,8 +262,9 @@ Quatro mecanismos combinados, todos por capability explícita:
 - **Q3 (quanto do client-runtime é aplicável)** — informada por B1, B3, B7, B10:
   o portátil é o *desenho* (registry+supervisor por environment, sessão RPC com
   replay/projeção, cache-store com snapshots, chamadas gated por capability);
-  o *código* é inseparável do Effect v4-RC + Rpc instável + Atoms
-  (`@effect/atom-react`) + React 19. Ver §9 para o recorte recomendado.
+  o *código* é inseparável do Effect v4-RC + Rpc instável + Atoms de
+  `effect/unstable/reactivity` (o binding React, `@effect/atom-react`, e o React 19
+  são do app web, não do runtime). Ver §4 para o recorte recomendado.
 - **Q9 (protocolo estável clients↔server)** — informada por B8, B6, B7:
   padrão comprovado = métodos `domínio.verbo` schemaeados; unário vs subscription
   vs comando-stream como kinds distintos; HTTP para auth/snapshots, WS para o
@@ -264,7 +275,7 @@ Quatro mecanismos combinados, todos por capability explícita:
   client↔servidor e, por construção, estende-se a Pi/OMP se capabilities de
   *runtime* viajarem em namespace próprio, separadas das de *environment/
   plataforma* (hoje o T3 só tem um ator de execução; a separação runtime×ambiente
-  é recomendação nossa, §9, não fato observado).
+  é recomendação nossa, §4, não fato observado).
 
 ## 4. Recomendações (padrões aproveitáveis) — não são decisões
 
@@ -290,24 +301,27 @@ Quatro mecanismos combinados, todos por capability explícita:
    vendors.
 8. **Descoberta como streams no registry** (B6): local-scan, relay e SSH convergem
    ao mesmo catálogo — cobre "múltiplos servidores sem poluir a UI" no nível de
-   dados (a apresentação é do ticket de explorer).
+   dados (a apresentação cabe a [O que torna Projects e Threads do T3 Code simples de navegar?](../issues/03-t3-explorer.md)).
 
-Custos de transplante a registrar: Effect v4-RC + Rpc instável atravessam
-contratos, runtime, servidor e web (`@effect/atom-react`); adotar o código exige
-adotar o Effect. Alternativa é reimplementar a *forma* sobre o transporte atual
-do PI WEB. **Não copiar monorepo, React ou camadas sem necessidade** — o valor
-está nos 8 padrões acima, não na árvore de pacotes.
+Custos de transplante a registrar: o Effect v4-RC + Rpc instável atravessam
+contratos, runtime e servidor (o binding `@effect/atom-react` fica no app web);
+adotar o código exige adotar o Effect. Alternativa é reimplementar a *forma* sobre
+o transporte atual do PI WEB. **Não copiar monorepo, React ou camadas sem
+necessidade** — o valor está nos 8 padrões acima, não na árvore de pacotes.
 
 ## 5. Decisões humanas (não tomadas aqui)
 
-Vão aos tickets próprios (client-server, desktop-platform, agent-runtime):
+Vão aos tickets próprios ([Qual interface separa clientes, estado compartilhado e execução?](../issues/07-client-server.md), [Como Electron integra servidor local e recursos nativos sem duplicar o Web?](../issues/12-desktop-platform.md), [Qual interface mínima acomoda Pi agora e OMP depois?](../issues/13-agent-runtime.md)):
 escolha do transporte do protocolo; adotar ou não Effect no novo produto;
 namespace de capabilities de runtime (Pi/OMP) separado das de environment;
 formato do catálogo de environments; política de self-update do servidor;
-escopo do `DesktopBridge`/Platform API. Este relatório alimenta
-`07-client-server.md` (Q 2, 3, 8, 9, parte cliente/servidor da 10),
-`12-desktop-platform.md` (boot/lifecycle/renderer) e `13-agent-runtime.md`
-(parte capabilities da 10).
+  escopo do `DesktopBridge`/Platform API. Este relatório alimenta
+  [Qual interface separa clientes, estado compartilhado e execução?](../issues/07-client-server.md)
+  (Q 2, 3, 8, 9, parte cliente/servidor da 10),
+  [Como Electron integra servidor local e recursos nativos sem duplicar o Web?](../issues/12-desktop-platform.md)
+  (boot/lifecycle/renderer) e
+  [Qual interface mínima acomoda Pi agora e OMP depois?](../issues/13-agent-runtime.md)
+  (parte capabilities da 10).
 
 ## 6. Limitações
 
@@ -319,5 +333,5 @@ escopo do `DesktopBridge`/Platform API. Este relatório alimenta
 - Wire-format do Effect RPC não inspecionado byte a byte; a separação
   client/server está provada no nível de contratos + wiring, não em captura de
   tráfego.
-- Comparação com PI WEB deliberadamente ausente (ticket 01); UX de sidebar
-  deliberadamente ausente (ticket 03).
+- Comparação com PI WEB deliberadamente ausente ([O que o PI WEB já resolve e onde estão seus acoplamentos?](../issues/01-pi-web.md)); UX de sidebar
+  deliberadamente ausente ([O que torna Projects e Threads do T3 Code simples de navegar?](../issues/03-t3-explorer.md)).
