@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist/desktop",
+    "rootDir": "src/desktop",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "declaration": false,
+    "sourceMap": true
+  },
+  "include": ["src/desktop/main.ts", "src/desktop/supervisor.ts", "src/desktop/windowConfig.ts", "src/desktop/platformApi.ts", "src/desktop/types.ts"]
+}

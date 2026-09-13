@@ -1,0 +1,21 @@
+appId: dev.pi-web.control-surface
+productName: PI WEB Control Surface
+files:
+  - dist/desktop/**
+  - dist/server/**
+  - dist/shared/**
+  - dist/sessiond/**
+  - dist/client/**
+  - package.json
+  - '!dist/**/*.map'
+  - '!dist/**/*.test.*'
+extraResources:
+  - from: docs/distribution-licenses.md
+    to: distribution-licenses.md
+linux:
+  target:
+    - AppImage
+  category: Development
+  maintainer: Federico Jaramillo Martinez
+directories:
+  output: dist-electron

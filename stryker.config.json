@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker-js/master/packages/api/schema/stryker-core.json",
+  "testRunner": "vitest",
+  "reporters": [
+    "progress",
+    "clear-text",
+    "json",
+    "html"
+  ],
+  "coverageAnalysis": "perTest",
+  "mutate": [
+    "src/client/src/api/parsers.ts:1570-1650"
+  ],
+  "vitest": {
+    "configFile": "vitest.stryker.config.ts"
+  },
+  "concurrency": 4,
+  "timeoutMS": 15000
+}
