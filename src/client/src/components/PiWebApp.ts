@@ -2,7 +2,7 @@ import { LitElement, html, type TemplateResult } from "lit";
 import { customElement, query, state } from "lit/decorators.js";
 import { configApi, effectiveWorkspaceAttachmentsFolder, effectiveWorkspaceUploadFolder, sessionsApi, workspacesApi, workspaceEffectiveAttachmentsFolder, workspaceEffectiveUploadFolder, type AskUserSubmission, type CommandOption, type ExtensionDialogAnswer, type Machine, type MachineHealth, type PiWebConfigValues, type PiWebShortcutConfig, type Project, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupRequest, type SessionInfo, type SessionModel, type SessionModelCatalogEntry, type SessionModelScopeMode, type SessionTreeForkResult, type SessionTreeNavigateResult, type SessionTreeSummaryChoice, type TerminalCommandRun, type Workspace } from "../api";
 import type { AppAction } from "../actions";
-import { initialAppState, type AppState, type ModelDialogOrigin } from "../appState";
+import { initialAppState, resetWorkspaceScopedState, type AppState, type ModelDialogOrigin } from "../appState";
 import { browserErrorContext, browserErrorScopeKey, BrowserErrorReporter, clearBrowserError, machineBrowserErrorScope, visibleBrowserErrors, workspaceBrowserErrorScope, type BrowserError, type BrowserErrorScope } from "../browserErrors";
 import { isSessionActive } from "../../../shared/activity";
 import { workspaceDeleteOperation } from "../../../shared/workspaceDeletion";
@@ -15,6 +15,8 @@ import { ProjectController, type ProjectTrustChoice } from "../controllers/proje
 import { PiWebStatusController } from "../controllers/piWebStatusController";
 import { SessionController } from "../controllers/sessionController";
 import { SessionNotificationController } from "../controllers/sessionNotificationController";
+import { RuntimeSessionSocket } from "../controlSurface/runtimeSessionSocket";
+import { WebEnvironmentRuntime } from "../controlSurface/webEnvironmentRuntime";
 import { WorkspaceController } from "../controllers/workspaceController";
 import { emptyMachineNavigationSnapshot, machineNavigationSnapshotFromState, routeFromMachineNavigationSnapshot, SessionStorageMachineNavigationMemory, type MachineNavigationSnapshot, type WorkspaceRouteSurface } from "../controllers/machineNavigationMemory";
 import { SessionStorageSessionSelectionMemory } from "../controllers/sessionSelection";
@@ -164,6 +166,7 @@ export class PiWebApp extends LitElement {
   private modelDialogRefreshPending = false;
   private modelDialogScopeInvalidation = 0;
 
+  private readonly environments = new WebEnvironmentRuntime();
   private readonly notifications = new SessionNotificationController(
     () => this.state,
     (patch) => { this.setState(patch); },
@@ -176,6 +179,8 @@ export class PiWebApp extends LitElement {
     new SessionStorageSessionSelectionMemory(),
     {
       notifications: this.notifications,
+      environment: this.environments,
+      socket: new RuntimeSessionSocket(this.environments),
       navigateToSession: (session, options) => this.navigateToSessionFromController(session, options),
       captureNavigation: () => navigationSelectionFromState(this.state),
       beginNavigationOperation: (scope) => this.beginNavigationOperation(scope),
@@ -231,6 +236,7 @@ export class PiWebApp extends LitElement {
     {
       navigateToMachine: (machine, options) => this.navigateToMachineFromController(machine, options),
       captureNavigation: () => navigationSelectionFromState(this.state),
+      environmentRuntime: this.environments,
     },
   );
   private readonly piWebStatusController = new PiWebStatusController(
@@ -450,6 +456,9 @@ export class PiWebApp extends LitElement {
     this.keyboard.reset();
     this.auth.dispose();
     this.sessions.dispose();
+    // Reversible: this element can be re-attached, so its environment runtime
+    // keeps projections and listeners and only stops background retries.
+    this.environments.detach();
     this.notifications.dispose();
     this.serverNotices.retainMachines(new Set<string>());
     this.realtime.close();
@@ -684,12 +693,20 @@ export class PiWebApp extends LitElement {
     const restoreSeq = ++this.routeRestoreSeq;
     this.routeRestoreDepth += 1;
     try {
-      const machineResolved = await this.restoreRouteMachine(parsedRoute, false);
-      if (!machineResolved) {
+      const machineRestore = await this.restoreRouteMachine(parsedRoute, false);
+      if (machineRestore !== "restored") {
         if (!selectionNavigation.isCurrent()) return;
         this.workspaces.clearSelection({ updateUrl: false });
-        const machineId = parsedRoute.machineId ?? "local";
-        this.browserErrors.report(machineBrowserErrorScope(machineId), `Machine not found: ${machineId}`);
+        // The destination cannot be served, so the previously selected machine
+        // must not remain visible as if the URL had been restored.
+        this.setState({ selectedMachine: undefined, ...resetWorkspaceScopedState() });
+        if (machineRestore === "missing") {
+          const machineId = parsedRoute.machineId ?? "local";
+          this.browserErrors.report(machineBrowserErrorScope(machineId), `Machine not found: ${machineId}`);
+        }
+        // "blocked": the machine exists and the machine controller already
+        // reported the protocol diagnostic; overwriting it with "not found"
+        // would hide the actionable cause.
         return;
       }
       await this.loadPluginsForSelectedMachine();
@@ -1017,13 +1034,26 @@ export class PiWebApp extends LitElement {
     this.remoteRouteRestoreTimer = undefined;
   }
 
-  private async restoreRouteMachine(route: ParsedAppRoute, updateUrl: boolean): Promise<boolean> {
+  /**
+   * Resolve the route's machine. "blocked" means the machine exists but the
+   * environment runtime refused the selection (protocol incompatible); the
+   * machine controller owns that diagnostic, so the caller must not replace it
+   * with a "not found" message.
+   */
+  private async restoreRouteMachine(route: ParsedAppRoute, updateUrl: boolean): Promise<"restored" | "missing" | "blocked"> {
     const routeMachineId = route.machineId ?? "local";
-    if (selectedMachineId(this.state) === routeMachineId) return true;
+    // Compare the actual selection: selectedMachineId() falls back to "local",
+    // which would report an unselected local machine as already restored.
+    if (this.state.selectedMachine?.id === routeMachineId) return "restored";
     const machine = this.state.machines.find((candidate) => candidate.id === routeMachineId);
-    if (machine === undefined) return false;
+    if (machine === undefined) {
+      if (routeMachineId === "local" && this.state.selectedMachine === undefined) {
+        return this.state.environmentStatuses[routeMachineId]?.state === "blocked" ? "blocked" : "restored";
+      }
+      return "missing";
+    }
     await this.machines.selectMachine(machine, { updateUrl });
-    return this.state.selectedMachine?.id === routeMachineId;
+    return this.state.selectedMachine?.id === routeMachineId ? "restored" : "blocked";
   }
 
   private routeMatchesCurrentSelection(route: Pick<AppRoute, "machineId" | "projectId" | "workspaceId" | "sessionId">): boolean {
@@ -1699,6 +1729,7 @@ export class PiWebApp extends LitElement {
         .locationIndicator=${this.appShell.isPwaDisplayMode}
         .machineStatuses=${this.state.machineStatuses}
         .machineStatusSnapshots=${this.state.machineStatusSnapshots}
+        .environmentStatuses=${this.state.environmentStatuses}
         .machinesCollapsed=${this.navigationSections.isCollapsed("machines")}
         .onToggleMachines=${() => { this.navigationSections.toggle("machines"); }}
         .onSelectMachine=${(machine: Machine) => this.selectNavigationItem("machines", "projects", () => this.selectMachineWithMemory(machine))}

@@ -20,6 +20,7 @@ describe("SessionController pending starts", () => {
       startSession: () => startRequest.promise,
       messages: (session) => { messageCalls.push(sessionLookupId(session)); return Promise.resolve(emptyPage); },
       status: (session) => { statusCalls.push(sessionLookupId(session)); return Promise.resolve(status(sessionLookupId(session))); },
+      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
     };
     const controller = new SessionController(
       () => state,

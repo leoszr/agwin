@@ -9,6 +9,9 @@ export interface IWorkbenchPanelInstance {
   readonly state: PanelState;
   setContext(context: WorkspaceContext): void;
   onAutoPinned?(reason: string): void;
+  init?(container: HTMLElement, doc?: Document): void;
+  focus?(): void;
+  dispose?(): void;
 }
 
 export class WorkbenchPanelRegistry {
@@ -65,6 +68,10 @@ export class WorkbenchPanelRegistry {
   getPanel(id: string): PanelState | undefined {
     return this.panels.get(id);
   }
+  getPanelInstance(id: string): IWorkbenchPanelInstance | undefined {
+    return this.panelInstances.get(id);
+  }
+
 
   getAllPanels(): PanelState[] {
     return Array.from(this.panels.values());

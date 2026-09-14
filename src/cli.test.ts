@@ -38,12 +38,10 @@ afterEach(() => {
 });
 
 describe("commandWithVersionCheck", () => {
-  it("emits a POSIX subshell group for bash", () => {
+  it("emits a POSIX subshell group for bash and zsh", () => {
     process.env["SHELL"] = "/bin/bash";
     expect(commandWithVersionCheck("npm")).toBe("command -v 'npm' && ('npm' --version 2>&1 || true)");
-  });
 
-  it("emits a POSIX subshell group for zsh", () => {
     process.env["SHELL"] = "/bin/zsh";
     expect(commandWithVersionCheck("pi")).toBe("command -v 'pi' && ('pi' --version 2>&1 || true)");
   });

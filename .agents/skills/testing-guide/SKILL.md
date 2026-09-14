@@ -31,6 +31,17 @@ Prefer this order unless the behavior requires a higher layer:
 
 Do not jump to a broad UI or integration test just because it feels more realistic if a lower layer proves the same behavior with less noise and less flake risk.
 
+## Test economy
+
+New tests must earn their place; each `it` block costs maintenance. Before adding a test:
+
+- One file per unit. Do not split by method or CRUD operation (`fileContentService.{delete,move,read,write}.test.ts` was merged into one file with per-operation `describe` blocks); that is the convention.
+- One `it` per distinct observable contract or code path. Fold same-path variants into a single test with multiple asserts (POSIX grouping for bash and zsh, local plus machine-scoped update-check route).
+- Copy-pasted production logic is not shared logic. Per-copy `catch → 404` blocks and per-flag resolvers each need their own tests; the fix is to extract a shared helper (tested once) plus one wiring test per callsite, not to delete the per-copy tests.
+- Test each layer once: a pure-helper unit test plus one integration seam that proves the wiring. Do not re-assert the helper's behavior through upper layers.
+- Never merge distinct contracts into one test just to lower the count: the first failing `expect` hides the rest, so failures surface one at a time. Failure localization is part of confidence.
+- Delete a test only when its assert is preserved by another test or the code path is dead. Merging asserts into fewer `it` blocks is allowed only for same-path variants; run the narrowed test file after any removal.
+
 ## Test helpers and fakes
 
 - Keep helpers local until reuse is clear. If a pattern appears in multiple files, consolidate deliberately rather than copy-pasting variants.

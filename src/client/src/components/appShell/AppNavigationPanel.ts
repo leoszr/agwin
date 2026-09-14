@@ -2,6 +2,7 @@ import { LitElement, css, html } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
 import type { Machine, MachineHealth, Project, SessionActivity, SessionInfo, SessionStatus, Workspace } from "../../api";
 import type { MachineStatusSnapshot } from "../../../../shared/machineStatus";
+import type { WebEnvironmentStatus } from "../../controlSurface/webEnvironmentRuntime";
 import type { WorkspaceLabelItem } from "../../plugins/types";
 import { selectedMachineId } from "../../controllers/types";
 import type { NavigationSection } from "../../appShell/navigationState";
@@ -23,6 +24,8 @@ export class AppNavigationPanel extends LitElement {
   @property({ type: Boolean }) locationIndicator = false;
   @property({ attribute: false }) machineStatuses: Record<string, MachineHealth> = {};
   @property({ attribute: false }) machineStatusSnapshots: Record<string, MachineStatusSnapshot> = {};
+  /** Client runtime connection state per environment, rendered next to machine health. */
+  @property({ attribute: false }) environmentStatuses: Record<string, WebEnvironmentStatus> = {};
   @property({ attribute: false }) projects: Project[] = [];
   @property({ attribute: false }) selectedProject?: Project;
   @property({ attribute: false }) workspaces: Workspace[] = [];
@@ -99,6 +102,7 @@ export class AppNavigationPanel extends LitElement {
           .locationIndicator=${this.locationIndicator}
           .statuses=${this.machineStatuses}
           .statusSnapshots=${this.machineStatusSnapshots}
+          .environmentStatuses=${this.environmentStatuses}
           .onSelect=${(machine: Machine) => this.onSelectMachine?.(machine)}
           .onRemove=${(machine: Machine) => this.onRemoveMachine?.(machine)}
           .onFocusNextSection=${() => { this.focusNextFrom("machines"); }}
@@ -115,6 +119,7 @@ export class AppNavigationPanel extends LitElement {
           .selected=${this.selectedMachine}
           .statuses=${this.machineStatuses}
           .statusSnapshots=${this.machineStatusSnapshots}
+          .environmentStatuses=${this.environmentStatuses}
           .collapsible=${this.collapsible}
           .collapsed=${this.machinesCollapsed}
           .onToggleCollapsed=${() => { this.onToggleMachines?.(); }}

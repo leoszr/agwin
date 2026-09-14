@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -86,6 +86,32 @@ describe("Desktop Security & Window Configuration (Ticket 22)", () => {
     expect(forceResult.restarted).toBe(true);
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("verifies that the built preload artifact exposes only curated platformApi without leaking node or ipc", () => {
+    const preloadDistPath = join(process.cwd(), "dist", "desktop", "preload.cjs");
+    if (!existsSync(preloadDistPath)) return;
+
+    const content = readFileSync(preloadDistPath, "utf8");
+    expect(content).toContain('exposeInMainWorld("platformApi"');
+    expect(content).not.toContain('exposeInMainWorld("ipcRenderer"');
+    expect(content).not.toContain('exposeInMainWorld("require"');
+    expect(content).not.toContain("process.binding");
+
+    // All curated methods present
+    const curatedMethods = [
+      "getHostStatus",
+      "stopHost",
+      "restartHost",
+      "openExternal",
+      "readClipboard",
+      "writeClipboard",
+      "showOpenDialog",
+      "showSaveDialog",
+    ];
+    for (const method of curatedMethods) {
+      expect(content).toContain(method);
     }
   });
 });

@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ModularWorkbenchApp } from "./ModularWorkbenchApp";
 import { ClientRuntime } from "../runtime/ClientRuntime";
 import { CURRENT_PROTOCOL_VERSION } from "../../shared/protocol/contracts";
+import type { WorkspaceFilesApi } from "../src/plugins/workspaceFiles";
 import type { WorkspaceContext } from "./types";
 import type { Thread } from "../domain/thread";
 
@@ -12,7 +13,7 @@ describe("ModularWorkbenchApp Integration & Legacy Path Cut (Ticket 33)", () => 
   let clientRuntime: ClientRuntime;
   let initialWs: WorkspaceContext;
   let testThread: Thread;
-
+  let fakeFilesApi: WorkspaceFilesApi;
   beforeEach(() => {
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -40,6 +41,14 @@ describe("ModularWorkbenchApp Integration & Legacy Path Cut (Ticket 33)", () => 
         status: "connected",
       }),
     });
+
+    fakeFilesApi = {
+      workspaceTree: vi.fn(() => Promise.resolve({ path: "", entries: [{ name: "index.ts", path: "src/index.ts", type: "file" as const }], scannedAt: "", truncated: false })),
+      workspaceFile: vi.fn(() => Promise.resolve({ path: "src/index.ts", content: "console.log('hi');", encoding: "utf8" as const, size: 18, modifiedAt: "", truncated: false, binary: false })),
+      writeWorkspaceFile: vi.fn(() => Promise.resolve({ path: "src/index.ts", size: 18, modifiedAt: "", created: true })),
+      deleteWorkspaceFile: vi.fn(() => Promise.resolve({ path: "src/index.ts", existed: true })),
+      moveWorkspaceFile: vi.fn(() => Promise.resolve({ fromPath: "", toPath: "", size: 0, modifiedAt: "" })),
+    };
   });
 
   it("composes Explorer, Chat, and demand panels into a single cohesive control surface", async () => {
@@ -51,6 +60,7 @@ describe("ModularWorkbenchApp Integration & Legacy Path Cut (Ticket 33)", () => 
       initialWorkspace: initialWs,
       projects: [{ id: "proj-1", name: "Main Project", environmentId: "local" }],
       threads: [testThread],
+      api: fakeFilesApi,
     });
 
     // Explorer and Chat initialized
@@ -99,6 +109,7 @@ describe("ModularWorkbenchApp Integration & Legacy Path Cut (Ticket 33)", () => 
       initialWorkspace: initialWs,
       projects: [{ id: "proj-1", name: "Main Project", environmentId: "local" }],
       threads: [testThread],
+      api: fakeFilesApi,
     });
 
     app.openFilesPanel("files-saved");
@@ -116,6 +127,7 @@ describe("ModularWorkbenchApp Integration & Legacy Path Cut (Ticket 33)", () => 
       initialWorkspace: initialWs,
       projects: [{ id: "proj-1", name: "Main Project", environmentId: "local" }],
       threads: [testThread],
+      api: fakeFilesApi,
     });
 
     // Alt+2 foca o chat via controller conectado a composicao.

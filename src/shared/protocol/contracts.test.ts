@@ -7,13 +7,13 @@ import {
 
 describe("Protocol contracts", () => {
   it("verifies exact match compatibility", () => {
-    const res = checkProtocolCompatibility(CURRENT_PROTOCOL_VERSION, { major: 1, minor: 0 });
+    const res = checkProtocolCompatibility(CURRENT_PROTOCOL_VERSION, { ...CURRENT_PROTOCOL_VERSION });
     expect(res.compatible).toBe(true);
     expect(res.degraded).toBe(false);
   });
 
   it("detects minor version differences with degradation", () => {
-    const res = checkProtocolCompatibility(CURRENT_PROTOCOL_VERSION, { major: 1, minor: 2 });
+    const res = checkProtocolCompatibility(CURRENT_PROTOCOL_VERSION, { major: 1, minor: 9 });
     expect(res.compatible).toBe(true);
     expect(res.degraded).toBe(true);
     expect(res.reason).toContain("Minor version difference");

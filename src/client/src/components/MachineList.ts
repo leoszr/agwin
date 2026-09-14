@@ -1,7 +1,8 @@
 import { LitElement, css, html, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { Machine, MachineHealth } from "../api";
+import type { Machine, MachineHealth, MachineStatus } from "../api";
 import type { MachineStatusSnapshot } from "../../../shared/machineStatus";
+import type { WebEnvironmentStatus } from "../controlSurface/webEnvironmentRuntime";
 import { actionMenuPanelStyle } from "./actionMenu";
 import { hasStatusUnread, renderActionActivityIndicator, statusActivityKind } from "./activityBadge";
 import type { KeyboardNavigableSection } from "./navigationFocus";
@@ -15,6 +16,8 @@ export class MachineList extends LitElement implements KeyboardNavigableSection 
   @property({ attribute: false }) statuses: Record<string, MachineHealth> = {};
   /** Per-machine status trees, keyed by machine id; a machine without one shows no indicator. */
   @property({ attribute: false }) statusSnapshots: Record<string, MachineStatusSnapshot> = {};
+  /** Client runtime connection state per environment; overrides the health label when it adds meaning. */
+  @property({ attribute: false }) environmentStatuses: Record<string, WebEnvironmentStatus> = {};
   @property({ type: Boolean, reflect: true }) collapsible = false;
   @property({ type: Boolean, reflect: true }) collapsed = false;
   @property({ attribute: false }) onSelect?: (machine: Machine) => void;
@@ -65,7 +68,7 @@ export class MachineList extends LitElement implements KeyboardNavigableSection 
 
   private renderMachine(machine: Machine) {
     const status = this.statuses[machine.id]?.status ?? machine.status ?? "unknown";
-    const statusLabel = status === "online" ? "online" : status === "offline" ? "offline" : status === "error" ? "error" : "unknown";
+    const statusLabel = environmentStatusLabel(this.environmentStatuses[machine.id]) ?? machineHealthStatusLabel(status);
     const hasRemoveAction = canRemoveMachine(machine) && this.onRemove !== undefined;
     return html`
       <div
@@ -165,6 +168,24 @@ export class MachineList extends LitElement implements KeyboardNavigableSection 
 
 export function canRemoveMachine(machine: Machine): boolean {
   return machine.kind === "remote";
+}
+
+export function machineHealthStatusLabel(status: MachineStatus): string {
+  return status === "online" ? "online" : status === "offline" ? "offline" : status === "error" ? "error" : "unknown";
+}
+
+/**
+ * Label the client runtime's connection state adds on top of transport health:
+ * a protocol-blocked environment is "incompatible", a minor-version or
+ * missing-capability link is "degraded". A healthy, fully compatible link
+ * returns undefined so the existing health label stays authoritative.
+ */
+export function environmentStatusLabel(status: WebEnvironmentStatus | undefined): string | undefined {
+  if (status === undefined) return undefined;
+  if (status.state === "blocked") return "incompatible";
+  if (status.state === "connecting") return "connecting";
+  if (status.state === "offline") return "offline";
+  return status.degraded ? "degraded" : undefined;
 }
 
 function machineMenuId(machineId: string): string {

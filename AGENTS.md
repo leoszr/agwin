@@ -25,6 +25,14 @@ Project-specific testing rules live in `.agents/skills/testing-guide/SKILL.md`.
 
 Use that skill whenever writing, modifying, reviewing, or planning tests, closing coverage gaps, triaging test failures, or creating test helpers/harnesses. Keep detailed testing conventions there rather than growing this top-level orientation file.
 
+Test economy rules (rationale and examples in the skill):
+- One test file per unit; do not fragment by method or CRUD operation.
+- Each `it` pins a distinct observable contract or path; fold same-path variants (shells, local/machine routes) into one test.
+- Copy-pasted production logic needs per-copy tests; prefer extracting a shared helper (tested once) plus one wiring test per callsite.
+- Test each layer once: pure-helper unit plus one integration seam, never the same asserts through both.
+- Never merge distinct contracts into one test to lower the count; failure localization is confidence.
+- Delete a test only when its assert survives elsewhere or the path is dead, and run the narrowed file after.
+
 ## Verification reporting
 
 Never report failed, incomplete, or skipped verification as passing. Identify any expected check that was not run and why, and do not mask a non-zero result. If a command intentionally probes a failure path or captures an exit for inspection, state that purpose and interpret the result.

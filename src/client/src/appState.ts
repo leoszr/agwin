@@ -1,5 +1,6 @@
 import type { AuthProviderOption, CommandOption, CommandResult, ExtensionDialogAnswer, ExtensionDialogCloseReason, Machine, MachineHealth, MachineRuntime, OAuthFlowState, PendingAskUser, PendingExtensionDialog, PiWebStatusResponse, Project, QueuedSessionMessage, SessionActivity, SessionInfo, SessionModelCatalogEntry, SessionStatus, SessionTreeSnapshot, TerminalCommandRun, Workspace } from "./api";
 import type { ChatLine } from "./components/shared";
+import type { WebEnvironmentStatus } from "./controlSurface/webEnvironmentRuntime";
 import type { MachineStatusSnapshot } from "../../shared/machineStatus";
 import type { QualifiedContributionId } from "./plugins/ids";
 import type { SelectedSessionNotificationInbox } from "./sessionNotifications";
@@ -13,6 +14,8 @@ export interface AppState {
   machineRuntimes: Record<string, MachineRuntime>;
   /** Latest per-machine status tree published by each machine's daemon. */
   machineStatusSnapshots: Record<string, MachineStatusSnapshot>;
+  /** Connection state, degradation, and protocol errors held by the client runtime per environment. */
+  environmentStatuses: Record<string, WebEnvironmentStatus>;
   projects: Project[];
   workspaces: Workspace[];
   sessions: SessionInfo[];
@@ -129,6 +132,7 @@ export function initialAppState(): AppState {
     machineStatuses: {},
     machineRuntimes: {},
     machineStatusSnapshots: {},
+    environmentStatuses: {},
     projects: [],
     workspaces: [],
     sessions: [],

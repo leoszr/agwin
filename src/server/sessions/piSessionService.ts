@@ -27,7 +27,7 @@ import {
   type ProjectTrustEventResult,
   type ResourceDiagnostic,
 } from "@earendil-works/pi-coding-agent";
-import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionCleanupExecuteResponse, ClientSessionCleanupPreviewResponse, ClientSessionModel, ClientSessionModelCatalogEntry, ClientSessionStatus, ClientSessionTreeForkRequest, ClientSessionTreeForkResult, ClientSessionTreeNavigateRequest, ClientSessionTreeNavigateResult, ClientThinkingLevel, SessionStreamSnapshot, SessionUiEvent } from "../types.js";
+import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionCleanupExecuteResponse, ClientSessionCleanupPreviewResponse, ClientSessionModel, ClientSessionModelCatalogEntry, ClientSessionStatus, ClientSessionTranscriptSnapshot, ClientSessionTreeForkRequest, ClientSessionTreeForkResult, ClientSessionTreeNavigateRequest, ClientSessionTreeNavigateResult, ClientThinkingLevel, SessionStreamSnapshot, SessionUiEvent } from "../types.js";
 import { projectBrowserMessage } from "../browserMessageProjection.js";
 import { pageMessagesAtSafeBoundary } from "./messagePaging.js";
 import { clientSessionFirstMessagePreview } from "./clientSessionPreview.js";
@@ -133,6 +133,8 @@ const MAX_PENDING_UNREAD_MUTATIONS = SESSION_UNREAD_LIMIT + 1;
  * persists, `getSessionFile()` answers and this throttle is bypassed.
  */
 const IDLE_SESSION_FILE_RESOLUTION_THROTTLE_MS = 30_000;
+/** Bounded retries for a coherent join snapshot; exhausted retries fail observably. */
+const TRANSCRIPT_SNAPSHOT_ATTEMPTS = 3;
 
 function noop(): void {
   // Intentionally empty default unsubscribe callback.
@@ -2311,6 +2313,30 @@ export class PiSessionService implements SessionRouteService {
       ? null
       : annotateAssistantThinkingLevel(projectBrowserMessage(streamingMessage), session.thinkingLevel);
     return { seq, partial };
+  }
+
+  /**
+   * Join-time snapshot that is coherent by construction: the committed page,
+   * the watermark, and the in-flight partial are captured in one tick, with the
+   * watermark read immediately before and after the branch read. A publish in
+   * between means the page and watermark disagree, so the read is retried;
+   * exhausted retries throw instead of returning an ambiguous pair, which keeps
+   * the client's previous transcript and never drops a committed message.
+   */
+  async transcriptSnapshot(ref: PiSessionRef, page?: { before?: number; limit?: number }): Promise<ClientSessionTranscriptSnapshot> {
+    const session = await this.getOrOpen(ref);
+    for (let attempt = 0; attempt < TRANSCRIPT_SNAPSHOT_ATTEMPTS; attempt += 1) {
+      const seq = this.events.currentSeq(session.sessionId);
+      const branch = await this.readableSessionBranch(ref, session);
+      if (this.events.currentSeq(session.sessionId) !== seq) continue;
+      const streamingMessage = session.state.streamingMessage;
+      const partial = streamingMessage === undefined || streamingMessage === null
+        ? null
+        : annotateAssistantThinkingLevel(projectBrowserMessage(streamingMessage), session.thinkingLevel);
+      const messages = pageMessagesAtSafeBoundary(historyMessagesFromEntries(branch), page);
+      return { seq, partial, messages: messages.messages, start: messages.start, total: messages.total };
+    }
+    throw new Error("Session transcript changed while being read; retry the join");
   }
 
   async getSessionDefaults(ref: PiSessionRef): Promise<SessionDefaults> {

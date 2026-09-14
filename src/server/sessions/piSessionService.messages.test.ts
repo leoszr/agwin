@@ -90,4 +90,80 @@ describe("PiSessionService", () => {
       await service.dispose();
     });
   });
+
+  describe("atomic transcript snapshot", () => {
+    const branch = [
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "hi" }] } },
+      { type: "message", message: { role: "assistant", provider: "openai", model: "gpt-4.1", content: [{ type: "text", text: "answer" }] } },
+    ];
+
+    /** One branch read per attempt; the hook models the stream publishing while it is read. */
+    function atomicService(onBranchRead: (events: CapturingSessionEventHub) => void) {
+      const events = new CapturingSessionEventHub();
+      const fake = fakeRuntime("session-1", {
+        sessionFile: "/tmp/session-1.jsonl",
+        sessionManager: fakeSessionManager("/workspace", {
+          getBranch: () => {
+            onBranchRead(events);
+            return branch;
+          },
+        }),
+      });
+      const service = new PiSessionService(events, {
+        agentDir: TEST_AGENT_DIR,
+        modelRuntime: testModelRuntime,
+        createAgentRuntime: runtimeCreator(fake.runtime),
+        sessionManager: sessionGateway([sessionRecord("session-1")]),
+        heartbeatIntervalMs: 60_000,
+      });
+      return { service, events };
+    }
+
+    it("returns the committed page, the watermark, and the partial from one coherent read", async () => {
+      const { service, events } = atomicService(() => undefined);
+      events.setSeq("session-1", 9);
+
+      const snapshot = await service.transcriptSnapshot(sessionRef("session-1"), { limit: 100 });
+
+      expect(snapshot.seq).toBe(9);
+      expect(snapshot.partial).toBeNull();
+      expect(snapshot.start).toBe(0);
+      expect(snapshot.total).toBe(2);
+      expect(snapshot.messages).toEqual([
+        { role: "user", content: [{ type: "text", text: "hi" }] },
+        { role: "assistant", provider: "openai", model: "gpt-4.1", content: [{ type: "text", text: "answer" }] },
+      ]);
+      await service.dispose();
+    });
+
+    it("retries while the stream publishes during the read and settles on the coherent attempt", async () => {
+      let reads = 0;
+      const { service } = atomicService((hub) => {
+        reads += 1;
+        // The first read races a publish; the second one is quiet.
+        if (reads === 1) hub.setSeq("session-1", hub.currentSeq("session-1") + 1);
+      });
+
+      const snapshot = await service.transcriptSnapshot(sessionRef("session-1"));
+
+      expect(snapshot.seq).toBe(1);
+      expect(snapshot.total).toBe(2);
+      expect(reads).toBe(2);
+      await service.dispose();
+    });
+
+    it("fails observably instead of returning an ambiguous pair under continuous publishing", async () => {
+      // Every read sees a publish, so no attempt can be proven coherent.
+      let reads = 0;
+      const { service } = atomicService((hub) => {
+        reads += 1;
+        hub.setSeq("session-1", hub.currentSeq("session-1") + 1);
+      });
+
+      await expect(service.transcriptSnapshot(sessionRef("session-1"))).rejects.toThrow("Session transcript changed while being read");
+      // The bounded retries were exhausted; nothing ambiguous was handed back.
+      expect(reads).toBeGreaterThanOrEqual(3);
+      await service.dispose();
+    });
+  });
 });

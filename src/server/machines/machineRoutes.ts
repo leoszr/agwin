@@ -1,8 +1,28 @@
 import type { FastifyInstance } from "fastify";
+import { RemoteMachineRequestError } from "./machineClient.js";
 import { MachineService, type CreateMachineInput, type UpdateMachineInput } from "./machineService.js";
 
 export function registerMachineRoutes(app: FastifyInstance, machines = new MachineService()): void {
   app.get("/api/machines", async () => ({ machines: await machines.list() }));
+
+  // Self descriptor of this server; a gateway fetches it to learn the version
+  // and capabilities of the environment it proxies to.
+  app.get("/api/descriptor", async () => machines.localDescriptor());
+
+  app.get<{ Params: { machineId: string } }>("/api/machines/:machineId/descriptor", async (request, reply) => {
+    try {
+      const descriptor = await machines.descriptor(request.params.machineId);
+      if (descriptor === undefined) return await reply.code(404).send({ error: "Machine not found" });
+      return descriptor;
+    } catch (error) {
+      const statusCode = error instanceof RemoteMachineRequestError ? error.statusCode : 502;
+      return await reply.code(statusCode).send({
+        error: "Environment descriptor unavailable",
+        machineId: request.params.machineId,
+        detail: errorMessage(error),
+      });
+    }
+  });
 
   app.post<{ Body: CreateMachineInput }>("/api/machines", async (request, reply) => {
     try {

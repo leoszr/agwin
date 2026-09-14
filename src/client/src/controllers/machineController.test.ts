@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, type Machine, type MachineHealth } from "../api";
 import { initialAppState, type AppState } from "../appState";
 import { browserErrorScopeKey, machineBrowserErrorScope, reportBrowserError } from "../browserErrors";
+import type { WebEnvironmentStatus } from "../controlSurface/webEnvironmentRuntime";
 import { machineStatusSnapshot } from "../machineStatus.testSupport";
-import { MachineController } from "./machineController";
+import { MachineController, type MachineEnvironmentRuntime } from "./machineController";
 
 const localMachine: Machine = {
   id: "local",
@@ -406,4 +407,164 @@ describe("MachineController", () => {
     expect(projects.loadProjects).toHaveBeenCalledOnce();
     expect(updateUrl).toHaveBeenCalledOnce();
   });
+
+  it("loads the catalog through the environment runtime and records its connection statuses", async () => {
+    let state: AppState = initialAppState();
+    const setState = (patch: Partial<AppState>) => { state = { ...state, ...patch }; };
+    const machinesApi = vi.spyOn(api, "machines");
+    const environment = fakeEnvironmentRuntime({
+      machines: [localMachine, remoteMachine],
+      statuses: {
+        local: { environmentId: "local", state: "connected", degraded: false },
+        [remoteMachine.id]: { environmentId: remoteMachine.id, state: "connected", degraded: true },
+      },
+    });
+
+    vi.spyOn(api, "health").mockResolvedValue({ machineId: "local", ok: true, checkedAt: "2026-05-26T00:00:01.000Z", status: "online" });
+    vi.spyOn(api, "runtime").mockResolvedValue({ machineId: "local", ok: true, checkedAt: "2026-05-26T00:00:02.000Z" });
+
+    const controller = new MachineController(() => state, setState, vi.fn(), { loadProjects: vi.fn() }, { environmentRuntime: environment.runtime });
+
+    await controller.loadMachines();
+
+    expect(machinesApi).not.toHaveBeenCalled();
+    expect(state.machines).toEqual([localMachine, remoteMachine]);
+    expect(state.environmentStatuses).toEqual({
+      local: { environmentId: "local", state: "connected", degraded: false },
+      [remoteMachine.id]: { environmentId: remoteMachine.id, state: "connected", degraded: true },
+    });
+  });
+
+  it("refuses to select an environment blocked by the client runtime", async () => {
+    let state: AppState = initialAppState();
+    const setState = (patch: Partial<AppState>) => { state = { ...state, ...patch }; };
+    const environment = fakeEnvironmentRuntime({
+      machines: [localMachine, remoteMachine],
+      statuses: {
+        [remoteMachine.id]: {
+          environmentId: remoteMachine.id,
+          state: "blocked",
+          degraded: false,
+          error: { code: "INCOMPATIBLE_VERSION", message: "Major version mismatch: client is 1.0, server is 99.0" },
+        },
+      },
+    });
+    const controller = new MachineController(() => state, setState, vi.fn(), { loadProjects: vi.fn() }, { environmentRuntime: environment.runtime });
+
+    await controller.selectMachine(remoteMachine);
+
+    expect(state.selectedMachine).toBeUndefined();
+    expect(state.browserErrors[browserErrorScopeKey(machineBrowserErrorScope(remoteMachine.id))]?.message).toBe(
+      "Remote is incompatible with this client: Major version mismatch: client is 1.0, server is 99.0",
+    );
+  });
+
+  it("registers a newly added machine with the environment runtime before selecting it", async () => {
+    let state: AppState = { ...initialAppState(), machines: [localMachine], selectedMachine: localMachine };
+    const setState = (patch: Partial<AppState>) => { state = { ...state, ...patch }; };
+    const environment = fakeEnvironmentRuntime({ machines: [localMachine, addedMachine] });
+    const projects = { loadProjects: vi.fn() };
+    vi.spyOn(api, "addMachine").mockResolvedValue(addedMachine);
+    vi.spyOn(api, "health").mockResolvedValue({ machineId: addedMachine.id, ok: true, checkedAt: "2026-05-27T00:00:01.000Z", status: "online" });
+    vi.spyOn(api, "runtime").mockResolvedValue({ machineId: addedMachine.id, ok: true, checkedAt: "2026-05-27T00:00:02.000Z" });
+    const controller = new MachineController(() => state, setState, vi.fn(), projects, { environmentRuntime: environment.runtime });
+
+    await controller.addMachine({ name: addedMachine.name, baseUrl: addedMachine.baseUrl ?? "" });
+
+    expect(environment.connected).toContain(addedMachine.id);
+    expect(state.environmentStatuses[addedMachine.id]).toMatchObject({ state: "connected" });
+  });
+
+  it("forgets the environment of a deleted machine so it cannot resurface", async () => {
+    let state: AppState = { ...initialAppState(), machines: [localMachine, remoteMachine], selectedMachine: localMachine };
+    const setState = (patch: Partial<AppState>) => { state = { ...state, ...patch }; };
+    const environment = fakeEnvironmentRuntime({
+      machines: [localMachine],
+      statuses: { [remoteMachine.id]: { environmentId: remoteMachine.id, state: "connected", degraded: false } },
+    });
+    vi.spyOn(api, "deleteMachine").mockResolvedValue({ deleted: true });
+    const controller = new MachineController(() => state, setState, vi.fn(), { loadProjects: vi.fn() }, { environmentRuntime: environment.runtime });
+
+    await controller.deleteMachine(remoteMachine);
+
+    expect(environment.removed).toEqual([remoteMachine.id]);
+    expect(state.environmentStatuses[remoteMachine.id]).toBeUndefined();
+    expect(state.machines).toEqual([localMachine]);
+  });
+
+  it("selects no machine when every catalogue environment is blocked", async () => {
+    let state: AppState = initialAppState();
+    const setState = (patch: Partial<AppState>) => { state = { ...state, ...patch }; };
+    const environment = fakeEnvironmentRuntime({
+      machines: [localMachine],
+      statuses: {
+        local: {
+          environmentId: "local",
+          state: "blocked",
+          degraded: false,
+          error: { code: "INCOMPATIBLE_VERSION", message: "Major version mismatch: client is 1.0, server is 99.0" },
+        },
+      },
+    });
+    const controller = new MachineController(() => state, setState, vi.fn(), { loadProjects: vi.fn() }, { environmentRuntime: environment.runtime });
+
+    await controller.loadMachines();
+
+    expect(state.selectedMachine).toBeUndefined();
+    expect(state.browserErrors[browserErrorScopeKey(machineBrowserErrorScope("local"))]?.message).toContain("incompatible with this client");
+  });
+
+  it("re-renders the environment status when the runtime reconnects or blocks in the background", () => {
+    let state: AppState = initialAppState();
+    const setState = (patch: Partial<AppState>) => { state = { ...state, ...patch }; };
+    const environment = fakeEnvironmentRuntime({ machines: [localMachine, remoteMachine] });
+    new MachineController(() => state, setState, vi.fn(), { loadProjects: vi.fn() }, { environmentRuntime: environment.runtime });
+
+    environment.emit({ environmentId: remoteMachine.id, state: "offline", degraded: false });
+
+    expect(state.environmentStatuses[remoteMachine.id]).toEqual({ environmentId: remoteMachine.id, state: "offline", degraded: false });
+  });
 });
+
+interface FakeEnvironmentRuntime {
+  runtime: MachineEnvironmentRuntime;
+  connected: string[];
+  removed: string[];
+  emit(status: WebEnvironmentStatus): void;
+}
+
+function fakeEnvironmentRuntime(options: {
+  machines: Machine[];
+  statuses?: Record<string, WebEnvironmentStatus>;
+}): FakeEnvironmentRuntime {
+  let statuses: Record<string, WebEnvironmentStatus> = options.statuses ?? {};
+  const connected: string[] = [];
+  const removed: string[] = [];
+  const listeners = new Set<(status: WebEnvironmentStatus) => void>();
+  return {
+    connected,
+    removed,
+    runtime: {
+      refreshCatalog: () => Promise.resolve(options.machines),
+      connectEnvironment: (machineId: string) => {
+        connected.push(machineId);
+        statuses = { ...statuses, [machineId]: statuses[machineId] ?? { environmentId: machineId, state: "connected", degraded: false } };
+        return Promise.resolve();
+      },
+      removeEnvironment: (machineId: string) => {
+        removed.push(machineId);
+        statuses = Object.fromEntries(Object.entries(statuses).filter(([id]) => id !== machineId));
+      },
+      getStatus: (machineId: string) => statuses[machineId] ?? { environmentId: machineId, state: "connected", degraded: false },
+      statuses: () => statuses,
+      onStatusChange: (listener: (status: WebEnvironmentStatus) => void) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+    },
+    emit(status) {
+      statuses = { ...statuses, [status.environmentId]: status };
+      for (const listener of listeners) listener(status);
+    },
+  };
+}

@@ -6,10 +6,10 @@ import { EnvironmentConnection } from "./EnvironmentConnection";
 import type {
   EnvironmentConnectionOptions,
   EnvironmentProjection,
+  EnvironmentStatus,
   SessionRef,
   SessionSnapshot,
 } from "./types";
-
 export interface CatalogMachine {
   id: string;
   name: string;
@@ -19,9 +19,14 @@ export interface CatalogMachine {
 export interface ClientRuntimeOptions {
   catalogFetcher: () => Promise<CatalogMachine[]>;
   descriptorFetcher: (envId: EnvironmentId) => Promise<EnvironmentDescriptor>;
-  sessionSnapshotFetcher?: (envId: EnvironmentId, sessionId: string) => Promise<SessionSnapshot>;
+  sessionSnapshotFetcher?: ((envId: EnvironmentId, session: SessionRef) => Promise<SessionSnapshot>) | undefined;
 }
 
+/**
+ * Client-side projections and connection state for every environment the
+ * browser talks to through the gateway. It owns no execution and no durable
+ * state: each environment stays the authority for its sessions.
+ */
 export class ClientRuntime {
   private readonly connections = new Map<EnvironmentId, EnvironmentConnection>();
   private readonly projections = new Map<EnvironmentId, EnvironmentProjection>();
@@ -38,41 +43,54 @@ export class ClientRuntime {
     this.selectedEnvironmentId = envId;
   }
 
-  async loadCatalog(): Promise<EnvironmentDescriptor[]> {
+  /**
+   * Load the gateway catalog and connect every environment it lists. Each
+   * environment connects independently, so a slow or offline one neither
+   * blocks nor invalidates the others.
+   */
+  async loadCatalog(): Promise<CatalogMachine[]> {
     const machines = await this.options.catalogFetcher();
 
-    // Independent parallel connection: a slow or offline machine does not block others!
-    const results = await Promise.allSettled(
-      machines.map(async (m) => {
-        const envId = m.id;
-        let conn = this.connections.get(envId);
-        if (conn === undefined) {
-          conn = this.createConnection(envId);
-          this.connections.set(envId, conn);
-        }
-        this.ensureProjection(envId);
-
-        await conn.connect();
-        return conn.descriptor;
-      }),
-    );
-
-    const descriptors: EnvironmentDescriptor[] = [];
-    for (const r of results) {
-      if (r.status === "fulfilled" && r.value !== undefined) {
-        descriptors.push(r.value);
-      }
+    // Ensure all connections and projections exist immediately so every environment
+    // in the catalog is known even before network probes finish.
+    for (const m of machines) {
+      const conn = this.connectionFor(m.id);
+      void conn.connect().catch(() => {
+        // Handled internally by EnvironmentConnection (state -> offline, emitError)
+      });
     }
 
-    return descriptors;
+    return machines;
   }
 
   getConnection(envId: EnvironmentId): EnvironmentConnection | undefined {
     return this.connections.get(envId);
   }
 
+  /**
+   * Connection for an environment, established before the caller uses it. A
+   * connection that lost its session transport keeps its descriptor, so the
+   * state — not the descriptor — decides whether a probe is needed; concurrent
+   * callers share the probe through the connection.
+   */
+  async ensureConnected(envId: EnvironmentId): Promise<EnvironmentConnection> {
+    const conn = this.connectionFor(envId);
+    if (conn.state !== "connected") await conn.connect();
+    return conn;
+  }
+
   getProjection(envId: EnvironmentId): EnvironmentProjection {
     return this.ensureProjection(envId);
+  }
+
+  getStatus(envId: EnvironmentId): EnvironmentStatus {
+    const projection = this.ensureProjection(envId);
+    return {
+      environmentId: envId,
+      state: projection.status,
+      degraded: projection.degraded,
+      ...(projection.error === undefined ? {} : { error: projection.error }),
+    };
   }
 
   getAllProjections(): EnvironmentProjection[] {
@@ -86,9 +104,19 @@ export class ClientRuntime {
     };
   }
 
-  async switchSession(envId: EnvironmentId, session: SessionRef): Promise<SessionSnapshot | undefined> {
+  /**
+   * Fetch a session's snapshot through this environment and make it the
+   * projection's active session. Live events that arrive while the fetch is in
+   * flight are held until `applySnapshot` has installed the seed, so the
+   * consumer never sees an event applied before the state it belongs to.
+   */
+  async switchSession(
+    envId: EnvironmentId,
+    session: SessionRef,
+    applySnapshot?: (snapshot: SessionSnapshot, isCurrent: () => boolean) => void | Promise<void>,
+  ): Promise<SessionSnapshot | undefined> {
     const projection = this.ensureProjection(envId);
-    projection.activeSessionId = session.id;
+    projection.activeSession = session;
     if (!projection.sessions.some((s) => s.id === session.id)) {
       projection.sessions.push(session);
     }
@@ -96,10 +124,11 @@ export class ClientRuntime {
     const conn = this.connections.get(envId);
     if (conn?.state !== "connected") {
       this.notifyProjection(projection);
-      return undefined;
+      const message = conn?.error?.message ?? `Environment "${envId}" is ${conn?.state ?? "not connected"}`;
+      throw new Error(message);
     }
 
-    const snapshot = await conn.fetchSessionSnapshotWithReconciliation(session.id);
+    const snapshot = await conn.fetchSessionSnapshotWithReconciliation(session, applySnapshot);
     if (snapshot !== undefined) {
       projection.snapshots.set(session.id, snapshot);
     }
@@ -107,26 +136,66 @@ export class ClientRuntime {
     return snapshot;
   }
 
-  applyLiveEvent(envId: EnvironmentId, sessionId: string, event: unknown, seq?: number): void {
-    const projection = this.ensureProjection(envId);
-    const existing = projection.snapshots.get(sessionId);
-    const nextSeq = seq ?? ((existing?.seq ?? 0) + 1);
+  /**
+   * Record a session transport loss. The session socket retries on its own, so
+   * only the environment state changes here.
+   */
+  reportTransportLoss(envId: EnvironmentId, message: string): void {
+    this.connectionFor(envId).reportTransportLoss(message);
+  }
 
-    // Deduplicate before mutating state: stale/duplicate seq never touches the snapshot.
-    if (existing !== undefined && nextSeq <= existing.seq) {
-      return;
-    }
+  /** Re-probe an environment after its session transport reconnected. */
+  probeEnvironment(envId: EnvironmentId): void {
+    this.connectionFor(envId).probe();
+  }
 
-    if (existing !== undefined) {
-      existing.messages.push(event);
-      existing.seq = nextSeq;
-      existing.messageCount++;
-    }
-
+  /**
+   * Forget one environment entirely: its connection, its reconnect timer, and
+   * its projection. Used when a machine leaves the catalog.
+   */
+  removeEnvironment(envId: EnvironmentId): void {
     const conn = this.connections.get(envId);
-    conn?.receiveLiveEvent({ seq: nextSeq, data: event, sessionId });
+    if (conn !== undefined) {
+      conn.disconnect();
+      this.connections.delete(envId);
+    }
+    this.projections.delete(envId);
+  }
 
-    this.notifyProjection(projection);
+  /** Keep only environments the catalog still lists. */
+  retainEnvironments(envIds: Iterable<EnvironmentId>): void {
+    const keep = new Set(envIds);
+    for (const envId of [...this.connections.keys()]) {
+      if (!keep.has(envId)) this.removeEnvironment(envId);
+    }
+    for (const envId of [...this.projections.keys()]) {
+      if (!keep.has(envId)) this.projections.delete(envId);
+    }
+  }
+
+  /**
+   * Route one live event of a session through the environment's exactly-once
+   * gate. The event reaches {@link subscribeSessionEvents} listeners only when
+   * it is not already reflected by the applied snapshot.
+   */
+  ingestSessionEvent(envId: EnvironmentId, sessionId: string, event: unknown, seq?: number): void {
+    this.connectionFor(envId).receiveLiveEvent({ sessionId, data: event, ...(seq === undefined ? {} : { seq }) });
+  }
+
+  subscribeSessionEvents(envId: EnvironmentId, sessionId: string, listener: (event: unknown, seq?: number) => void): () => void {
+    return this.connectionFor(envId).onSessionEvent((event) => {
+      if (event.sessionId !== sessionId) return;
+      listener(event.data, event.seq);
+    });
+  }
+
+  private connectionFor(envId: EnvironmentId): EnvironmentConnection {
+    let conn = this.connections.get(envId);
+    if (conn === undefined) {
+      conn = this.createConnection(envId);
+      this.connections.set(envId, conn);
+    }
+    return conn;
   }
 
   private createConnection(envId: EnvironmentId): EnvironmentConnection {
@@ -141,24 +210,15 @@ export class ClientRuntime {
       const proj = this.ensureProjection(envId);
       proj.status = state;
       proj.descriptor = conn.descriptor;
+      proj.degraded = conn.degraded;
+      proj.error = conn.error;
       this.notifyProjection(proj);
-      // Pos-reconexao: reatualiza o snapshot da sessao ativa sem exigir switchSession manual.
-      if (state === "connected" && proj.activeSessionId !== undefined) {
-        const sessionId = proj.activeSessionId;
-        void conn.fetchSessionSnapshotWithReconciliation(sessionId).then((snapshot) => {
-          if (snapshot !== undefined) {
-            proj.snapshots.set(sessionId, snapshot);
-            this.notifyProjection(proj);
-          }
-        }).catch(() => {
-          // Mantem o snapshot anterior; falha de fetch nao invalida a projecao conectada.
-        });
-      }
     });
 
     conn.onError((error) => {
       const proj = this.ensureProjection(envId);
       proj.error = error;
+      proj.degraded = conn.degraded;
       this.notifyProjection(proj);
     });
 
@@ -171,6 +231,7 @@ export class ClientRuntime {
       proj = {
         environmentId: envId,
         status: "connecting",
+        degraded: false,
         sessions: [],
         snapshots: new Map(),
       };
@@ -185,11 +246,23 @@ export class ClientRuntime {
     }
   }
 
+  /**
+   * Stop background work without losing projections or listeners. A surface
+   * that is detached and re-attached resumes from here; `dispose` stays the
+   * explicit final teardown.
+   */
+  detach(): void {
+    for (const conn of this.connections.values()) {
+      conn.suspend();
+    }
+  }
+
   dispose(): void {
     for (const conn of this.connections.values()) {
       conn.disconnect();
     }
     this.connections.clear();
+    this.projections.clear();
     this.projectionChangeListeners.clear();
   }
 }

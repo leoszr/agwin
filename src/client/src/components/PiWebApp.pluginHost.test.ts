@@ -513,6 +513,7 @@ describe("PiWebApp plugin host", () => {
     const sessionKey = (id: string) => machineSessionKey("local", id);
     if (!Reflect.set(sessions, "socket", socket)
       || !Reflect.set(sessions, "notifications", undefined)
+      || !Reflect.set(sessions, "environment", undefined)
       || !Reflect.set(sessions, "api", {
         ...defaultApi,
         startSession,
@@ -929,6 +930,7 @@ describe("PiWebApp plugin host", () => {
     const status = { sessionId: session.id, isStreaming: false, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 };
     if (!Reflect.set(sessions, "socket", socket)
       || !Reflect.set(sessions, "notifications", undefined)
+      || !Reflect.set(sessions, "environment", undefined)
       || !Reflect.set(sessions, "api", {
         messages: async () => { await waitAt("refresh"); return { messages: [], start: 0, total: 0 }; },
         status: () => Promise.resolve(status),
@@ -1723,7 +1725,7 @@ describe("PiWebApp plugin host", () => {
         selectedSession: undefined,
         error: "",
       });
-      return Promise.resolve(true);
+      return Promise.resolve("restored");
     })) throw new Error("Could not stub machine route selection");
 
     type TestFileContent = Awaited<ReturnType<WorkspaceFilesCapabilityV1["readFile"]>>;
@@ -3246,6 +3248,7 @@ function installRuntimeRecoveryBoundaries(
   };
   if (!Reflect.set(sessions, "socket", socket)
     || !Reflect.set(sessions, "notifications", undefined)
+    || !Reflect.set(sessions, "environment", undefined)
     || !Reflect.set(sessions, "api", {
       messages: () => Promise.resolve({ messages: [], start: 0, total: 0 }),
       status: () => Promise.resolve({ sessionId: session.id, isStreaming: false, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }),
@@ -3312,7 +3315,7 @@ function verifiedPluginModes(app: PiWebApp): Map<unknown, unknown> {
 function stubRouteMachineSelection(app: PiWebApp, applySelection: () => void): void {
   if (!Reflect.set(app, "restoreRouteMachine", () => {
     applySelection();
-    return Promise.resolve(true);
+    return Promise.resolve("restored");
   })) throw new Error("Could not stub machine route selection");
 }
 

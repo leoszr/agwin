@@ -1,7 +1,10 @@
 import { app, BrowserWindow, session, ipcMain, shell, dialog, clipboard } from "electron";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { DesktopHostSupervisor } from "./supervisor.js";
 import { getDesktopCsp, getMainWindowOptions, getPopoutWindowOptions, validateExternalUrl } from "./windowConfig.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const DEFAULT_GATEWAY_PORT = 18504;
 const supervisor = new DesktopHostSupervisor({

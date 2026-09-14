@@ -16,6 +16,7 @@ export class SessionSocket {
   private hasOpened = false;
   private onReconnect: (() => void) | undefined;
   private onInitialOpen: (() => void) | undefined;
+  private onDisconnect: ((reason: string) => void) | undefined;
   private machineId = "local";
 
   connect(
@@ -24,6 +25,7 @@ export class SessionSocket {
     onReconnect?: () => void,
     machineId = "local",
     onInitialOpen?: () => void,
+    onDisconnect?: (reason: string) => void,
   ): void {
     this.close();
     this.machineId = machineId;
@@ -31,6 +33,7 @@ export class SessionSocket {
     this.onEvent = onEvent;
     this.onReconnect = onReconnect;
     this.onInitialOpen = onInitialOpen;
+    this.onDisconnect = onDisconnect;
     this.shouldReconnect = true;
     this.open();
   }
@@ -48,6 +51,7 @@ export class SessionSocket {
     this.onEvent = undefined;
     this.onReconnect = undefined;
     this.onInitialOpen = undefined;
+    this.onDisconnect = undefined;
     this.hasOpened = false;
     this.machineId = "local";
   }
@@ -70,6 +74,9 @@ export class SessionSocket {
     socket.onclose = () => {
       if (this.socket !== socket) return;
       this.socket = undefined;
+      // An intentional close() has already cleared shouldReconnect; only an
+      // unexpected drop is reported, and the transport keeps retrying itself.
+      if (this.shouldReconnect) this.onDisconnect?.("Session stream disconnected");
       this.scheduleReconnect();
     };
   }

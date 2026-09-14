@@ -8,12 +8,32 @@ import { canRemoveMachine, MachineList } from "./MachineList";
 
 afterEach(() => {
   document.body.replaceChildren();
+  localStorage.clear();
 });
 
 describe("canRemoveMachine", () => {
   it("only allows remote machines to be removed from the machine list", () => {
     expect(canRemoveMachine(machine("local", "local"))).toBe(false);
     expect(canRemoveMachine(machine("remote-a", "remote"))).toBe(true);
+  });
+});
+
+describe("environment status label", () => {
+  it("marks a protocol-blocked environment as incompatible and a degraded link as degraded", async () => {
+    const list = await mountMachineList([machine("local", "local"), machine("remote-a", "remote")]);
+    list.environmentStatuses = {
+      local: { environmentId: "local", state: "connected", degraded: true },
+      "remote-a": {
+        environmentId: "remote-a",
+        state: "blocked",
+        degraded: false,
+        error: { code: "INCOMPATIBLE_VERSION", message: "Major version mismatch" },
+      },
+    };
+    await list.updateComplete;
+
+    expect(rowFor(list, "local").textContent).toContain("degraded");
+    expect(rowFor(list, "remote-a").textContent).toContain("incompatible");
   });
 });
 

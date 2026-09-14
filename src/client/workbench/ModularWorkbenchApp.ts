@@ -1,7 +1,7 @@
 import { WorkbenchPanelRegistry } from "./panelRegistry";
 import { serializeWorkbenchLayout } from "./layoutStorage";
 import { AccessibleWorkbenchController } from "./accessibleActions";
-import { FilesDockviewPanel } from "./FilesDockviewPanel";
+import { FilesDockviewPanel, type FilesPanelOptions } from "./FilesDockviewPanel";
 import { DiffDockviewPanel } from "./DiffDockviewPanel";
 import { TerminalDockviewPanel } from "./TerminalDockviewPanel";
 import { ModularChatPanel } from "./ModularChatPanel";
@@ -13,11 +13,20 @@ import type { ClientRuntime } from "../runtime/ClientRuntime";
 import type { AgentRuntime } from "../../server/agent/types";
 import type { ModularChatPanelOptions } from "./ModularChatPanel";
 
+export interface OpenFilesPanelOptions {
+  files?: FilesPanelOptions["files"];
+  api?: FilesPanelOptions["api"];
+  fileService?: FilesPanelOptions["fileService"];
+}
+
 export interface ModularWorkbenchAppOptions {
   container: HTMLElement;
   runtime: ClientRuntime;
   agentRuntime?: AgentRuntime | undefined;
   draftStorage?: ModularChatPanelOptions["draftStorage"] | undefined;
+  files?: FilesPanelOptions["files"];
+  api?: FilesPanelOptions["api"];
+  fileService?: FilesPanelOptions["fileService"] | undefined;
   initialWorkspace: WorkspaceContext;
   projects: ProjectExplorerProject[];
   threads: Thread[];
@@ -157,12 +166,19 @@ export class ModularWorkbenchApp {
     return newThread;
   }
 
-  openFilesPanel(id?: string, mode: "following" | "pinned" = "following"): FilesDockviewPanel {
+  openFilesPanel(
+    id?: string,
+    mode: "following" | "pinned" = "following",
+    options?: OpenFilesPanelOptions,
+  ): FilesDockviewPanel {
     const panelId = id ?? `files-${String(Date.now())}`;
     const panel = new FilesDockviewPanel({
       id: panelId,
       context: this.activeWorkspace,
       mode,
+      files: options?.files ?? this.options.files,
+      api: options?.api ?? this.options.api,
+      fileService: options?.fileService ?? this.options.fileService,
     });
     this.registry.registerPanel(panel.state, panel);
     return panel;

@@ -28,6 +28,7 @@ import type {
   ClientSessionModel,
   ClientSessionModelCatalogEntry,
   ClientSessionRef,
+  ClientSessionTranscriptSnapshot,
   ClientSessionStatus,
   ClientSessionTreeForkRequest,
   ClientSessionTreeForkResult,
@@ -58,6 +59,7 @@ export interface SessionRouteService {
   messages(ref: SessionRouteRef, page?: { before?: number; limit?: number }): Promise<ClientMessagePage>;
   status(ref: SessionRouteRef): Promise<ClientSessionStatus>;
   streamSnapshot(ref: SessionRouteRef): Promise<SessionStreamSnapshot>;
+  transcriptSnapshot(ref: SessionRouteRef, page?: { before?: number; limit?: number }): Promise<ClientSessionTranscriptSnapshot>;
   notificationCatalog(): SessionNotificationCatalogSnapshot | Promise<SessionNotificationCatalogSnapshot>;
   unreadCatalog(): Promise<SessionUnreadCatalogSnapshot>;
   acknowledgeUnread(sessionId: string, request: SessionUnreadAcknowledgeRequest): Promise<SessionUnreadCatalogSnapshot>;

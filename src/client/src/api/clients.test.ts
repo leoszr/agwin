@@ -85,24 +85,18 @@ describe("machine-scoped runtime API", () => {
     expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/pi-web/status");
   });
 
-  it("requests an uncached update check through the local status route", async () => {
-    const fetchMock = stubJsonFetch(piWebStatusResponse());
-
+  it("requests an uncached update check through local and machine-scoped status routes", async () => {
+    const localFetch = stubJsonFetch(piWebStatusResponse());
     await piWebApi.checkForUpdates();
+    expect(localFetch).toHaveBeenCalledOnce();
+    expect(fetchCall(localFetch, 0)[0]).toBe("https://pi.example.test/api/pi-web/status?refresh=1");
+    expect(fetchCall(localFetch, 0)[1]?.cache).toBe("no-store");
 
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/pi-web/status?refresh=1");
-    expect(fetchCall(fetchMock, 0)[1]?.cache).toBe("no-store");
-  });
-
-  it("requests an uncached update check through the selected machine route", async () => {
-    const fetchMock = stubJsonFetch(piWebStatusResponse());
-
+    const remoteFetch = stubJsonFetch(piWebStatusResponse());
     await piWebApi.checkForUpdates("remote a");
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/pi-web/status?refresh=1");
-    expect(fetchCall(fetchMock, 0)[1]?.cache).toBe("no-store");
+    expect(remoteFetch).toHaveBeenCalledOnce();
+    expect(fetchCall(remoteFetch, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/pi-web/status?refresh=1");
+    expect(fetchCall(remoteFetch, 0)[1]?.cache).toBe("no-store");
   });
 
   it("reads machine runtime through the gateway route", async () => {

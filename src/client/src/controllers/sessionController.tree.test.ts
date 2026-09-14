@@ -123,8 +123,8 @@ describe("SessionController session tree navigation", () => {
     socket.emit({ type: "message.append", message: { role: "assistant", content: "stale live event" }, seq: 1 });
 
     const oldRefresh = controller.refreshSelectedSession();
-    await Promise.resolve();
-    expect(messageCalls).toBe(2);
+    // The refresh reads the stream watermark before the message page.
+    await vi.waitFor(() => { expect(messageCalls).toBe(2); });
 
     const navigation = controller.navigateTree("root", { mode: "custom", instructions: "focus on the prompt" });
     await Promise.resolve();

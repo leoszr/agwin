@@ -4,10 +4,10 @@
 
 **Blocked by:** 21/Operar uma Session Web pelo Client runtime
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] O Desktop instala, inicia ou encontra o host versionado sem administração manual.
-- [ ] Web e Desktop observam e controlam a mesma Session e o mesmo transcript.
-- [ ] Fechar ou reiniciar o renderer não encerra o host nem o agente.
-- [ ] Renderer e popouts usam a mesma origem e os mesmos contratos HTTP/WS do Web.
-- [ ] Sandbox, context isolation, CSP e preload curado são verificados no artefato empacotado.
+- [x] O Desktop instala, inicia ou encontra o host versionado sem administração manual.
+- [x] Web e Desktop observam e controlam a mesma Session e o mesmo transcript.
+- [x] Fechar ou reiniciar o renderer não encerra o host nem o agente.
+- [x] Renderer e popouts usam a mesma origem e os mesmos contratos HTTP/WS do Web.
+- [x] Sandbox, context isolation, CSP e preload curado são verificados no artefato empacotado.

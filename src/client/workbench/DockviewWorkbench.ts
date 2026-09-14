@@ -1,11 +1,12 @@
 import { createDockview, type DockviewApi, type IContentRenderer, type SerializedDockview } from "dockview-core";
-import { WorkbenchPanelRegistry } from "./panelRegistry.js";
+import { WorkbenchPanelRegistry, type IWorkbenchPanelInstance } from "./panelRegistry.js";
 import {
   loadWorkbenchLayoutFromStorage,
   saveWorkbenchLayoutToStorage,
   type SerializedLayoutData,
 } from "./layoutStorage.js";
 import type { PanelState, WorkspaceContext } from "./types.js";
+import { FilesDockviewPanel, type FilesPanelOptions } from "./FilesDockviewPanel.js";
 
 export interface DockviewWorkbenchOptions {
   container: HTMLElement;
@@ -40,14 +41,37 @@ export class DockviewWorkbench {
   private createRenderer(name: string): IContentRenderer {
     const el = document.createElement("div");
     el.className = `dockview-panel-content panel-${name}`;
+    let panelId: string | undefined;
+
     return {
       element: el,
-      init: () => undefined,
-      dispose: () => undefined,
+      init: (parameters: { api: { id: string } }) => {
+        panelId = parameters.api.id;
+        const instance = this.registry.getPanelInstance(panelId);
+        if (instance !== undefined && typeof instance.init === "function") {
+          instance.init(el);
+        }
+      },
+      focus: () => {
+        if (panelId !== undefined) {
+          const instance = this.registry.getPanelInstance(panelId);
+          if (instance !== undefined && typeof instance.focus === "function") {
+            instance.focus();
+          }
+        }
+      },
+      dispose: () => {
+        if (panelId !== undefined) {
+          const instance = this.registry.getPanelInstance(panelId);
+          if (instance !== undefined && typeof instance.dispose === "function") {
+            instance.dispose();
+          }
+        }
+      },
     };
   }
 
-  addPanel(state: PanelState, instance?: import("./panelRegistry").IWorkbenchPanelInstance): void {
+  addPanel(state: PanelState, instance?: IWorkbenchPanelInstance): void {
     this.registry.registerPanel(state, instance);
     this.api.addPanel({
       id: state.id,
@@ -56,10 +80,51 @@ export class DockviewWorkbench {
     });
   }
 
-  restoreSavedLayout(): boolean {
+  addFilesPanel(options?: {
+    id?: string;
+    mode?: "following" | "pinned";
+    context?: WorkspaceContext;
+    files?: FilesPanelOptions["files"];
+    api?: FilesPanelOptions["api"];
+    fileService?: FilesPanelOptions["fileService"];
+  }): FilesDockviewPanel {
+    const panelId = options?.id ?? `files-${String(Date.now())}`;
+    const panel = new FilesDockviewPanel({
+      id: panelId,
+      context: options?.context ?? this.currentContext,
+      mode: options?.mode ?? "following",
+      files: options?.files,
+      api: options?.api,
+      fileService: options?.fileService,
+    });
+    this.addPanel(panel.state, panel);
+    return panel;
+  }
+
+  restoreSavedLayout(options?: {
+    files?: FilesPanelOptions["files"];
+    api?: FilesPanelOptions["api"];
+    fileService?: FilesPanelOptions["fileService"];
+  }): boolean {
     const saved = loadWorkbenchLayoutFromStorage();
     if (saved !== null) {
       try {
+        for (const p of saved.panels) {
+          if (!this.registry.getPanel(p.id)) {
+            let instance: IWorkbenchPanelInstance | undefined;
+            if (p.type === "files") {
+              instance = new FilesDockviewPanel({
+                id: p.id,
+                context: p.context,
+                mode: p.mode,
+                files: options?.files,
+                api: options?.api,
+                fileService: options?.fileService,
+              });
+            }
+            this.registry.registerPanel(p, instance);
+          }
+        }
         const rawJson = JSON.stringify(saved.gridGeometry);
         const parsed: unknown = JSON.parse(rawJson);
         if (typeof parsed === "object" && parsed !== null) {

@@ -97,6 +97,7 @@ describe("SessionController cached-new sessions", () => {
         return Promise.resolve(emptyPage);
       },
       status: (session) => Promise.resolve(status(sessionLookupId(session))),
+      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
     };
     const controller = new SessionController(
       () => state,
@@ -143,6 +144,10 @@ describe("SessionController cached-new sessions", () => {
         ? Promise.reject(new Error("Session not found"))
         : Promise.resolve(emptyPage),
       status: (session) => Promise.resolve(status(sessionLookupId(session))),
+      // The refresh reads the stream watermark before the message page, so a
+      // missing stub here would fail the join on a network error instead of the
+      // Session-not-found path this test exercises.
+      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
     };
     const controller = new SessionController(
       () => state,

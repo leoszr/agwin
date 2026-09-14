@@ -2,10 +2,11 @@ import { LitElement, css, html, type PropertyValues, type TemplateResult } from 
 import { customElement, property, state } from "lit/decorators.js";
 import type { Machine, MachineHealth, MachineStatus } from "../api";
 import type { MachineStatusSnapshot } from "../../../shared/machineStatus";
+import type { WebEnvironmentStatus } from "../controlSurface/webEnvironmentRuntime";
 import { browserGatewayDisplayUrl, machineIconUrl } from "../instanceIdentity";
 import { actionMenuPanelStyle } from "./actionMenu";
 import { hasStatusUnread, renderActivityIndicator, statusActivityKind } from "./activityBadge";
-import { canRemoveMachine } from "./MachineList";
+import { canRemoveMachine, environmentStatusLabel, machineHealthStatusLabel } from "./MachineList";
 import type { KeyboardNavigableSection } from "./navigationFocus";
 
 @customElement("machine-switcher")
@@ -17,6 +18,8 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
   @property({ attribute: false }) statuses: Record<string, MachineHealth> = {};
   /** Per-machine status trees, keyed by machine id; a machine without one shows no indicator. */
   @property({ attribute: false }) statusSnapshots: Record<string, MachineStatusSnapshot> = {};
+  /** Client runtime connection state per environment; overrides the health label when it adds meaning. */
+  @property({ attribute: false }) environmentStatuses: Record<string, WebEnvironmentStatus> = {};
   @property({ attribute: false }) onSelect?: (machine: Machine) => void | Promise<void>;
   @property({ attribute: false }) onRemove?: (machine: Machine) => void | Promise<void>;
   @property({ attribute: false }) onFocusNextSection?: () => void | Promise<void>;
@@ -80,7 +83,7 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
             <span class="machine-switcher-kicker">Machine</span>
             <span class="machine-switcher-label">${label}</span>
           </span>
-          <span class=${`machine-status ${status}`}>${machineStatusLabel(status)}</span>
+          <span class=${`machine-status ${status}`}>${environmentStatusLabel(this.environmentStatuses[selected.id]) ?? machineStatusLabel(status)}</span>
           <span class="machine-chevron" aria-hidden="true">▾</span>
         </button>
         ${this.open ? html`
@@ -108,7 +111,7 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
           @keydown=${(event: KeyboardEvent) => { this.handleMachineOptionKeydown(event); }}
         >
           <span class="machine-option-name">${this.renderMachineIcon(machine)}${this.renderActivity(machine)}<span>${machine.name}</span></span>
-          <small>${machineSubtitle(machine)} · ${machineStatusLabel(status)}</small>
+          <small>${machineSubtitle(machine)} · ${environmentStatusLabel(this.environmentStatuses[machine.id]) ?? machineStatusLabel(status)}</small>
         </button>
         ${hasActions ? html`
           <div class="machine-option-actions">
@@ -355,7 +358,7 @@ function machineStatus(machine: Machine, statuses: Record<string, MachineHealth>
 }
 
 function machineStatusLabel(status: MachineStatus): string {
-  return status === "online" ? "online" : status === "offline" ? "offline" : status === "error" ? "error" : "unknown";
+  return machineHealthStatusLabel(status);
 }
 
 function machineTitle(machine: Machine): string {

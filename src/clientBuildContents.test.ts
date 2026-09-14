@@ -8,7 +8,9 @@ import { describe, expect, it } from "vitest";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 describe("production client build contents", () => {
-  it("emits deployment-relative HTML and PWA URLs", async () => {
+  // A production vite build runs inside this test; the default 5s budget is
+  // not enough while the full suite runs it in parallel.
+  it("emits deployment-relative HTML and PWA URLs", { timeout: 60_000 }, async () => {
     const outDir = await mkdtemp(join(tmpdir(), "pi-web-client-build-"));
     try {
       await build({

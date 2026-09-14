@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { MachineClient } from "./machines/machineClient.js";
+import { RemoteMachineRequestError, type MachineClient } from "./machines/machineClient.js";
 import type { PiWebConfigResponse, PiWebConfigValues } from "../shared/apiTypes.js";
 import { appTestContext, configFromMachineConfigWriteBody, fakeRemoteClient, fullPiWebConfig, piWebConfigResponse, registerAppTestHooks, selectedMachinePiWebConfig } from "./app.testSupport.js";
 
@@ -11,6 +11,98 @@ describe("buildApp machine routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ machines: [{ id: "local", name: "Local", kind: "local", createdAt: "1970-01-01T00:00:00.000Z", updatedAt: "1970-01-01T00:00:00.000Z" }] });
+  });
+
+  it("serves the local environment descriptor with protocol version and capabilities", async () => {
+    const machineScoped = await appTestContext.app.inject({ method: "GET", url: "/api/machines/local/descriptor" });
+    expect(machineScoped.statusCode).toBe(200);
+    expect(machineScoped.json()).toMatchObject({
+      id: "local",
+      name: "Local",
+      kind: "local",
+      protocolVersion: { major: 1, minor: 1 },
+      capabilities: { streaming: true, replayCursor: true, transcriptSnapshot: true },
+      status: "connected",
+    });
+
+    // The same server answers the identity-free self route a gateway fetches.
+    const self = await appTestContext.app.inject({ method: "GET", url: "/api/descriptor" });
+    expect(self.statusCode).toBe(200);
+    expect(self.json()).toEqual(machineScoped.json());
+  });
+
+  it("reports the remote environment's own version and capabilities under the gateway machine id", async () => {
+    const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
+    const remote = addResponse.json<{ id: string }>();
+    const requestJson = vi.fn<MachineClient["requestJson"]>(() => Promise.resolve({
+      statusCode: 200,
+      headers: { "content-type": "application/json" },
+      body: {
+        id: "local",
+        name: "Remote self",
+        kind: "local",
+        protocolVersion: { major: 1, minor: 1 },
+        capabilities: { streaming: true, agentRuntime: "pi" },
+        status: "connected",
+      },
+    }));
+    appTestContext.remoteClient = fakeRemoteClient({ requestJson });
+
+    const response = await appTestContext.app.inject({ method: "GET", url: `/api/machines/${remote.id}/descriptor` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      id: remote.id,
+      name: "Remote",
+      kind: "remote",
+      protocolVersion: { major: 1, minor: 1 },
+      capabilities: { streaming: true, agentRuntime: "pi" },
+      status: "connected",
+    });
+    expect(requestJson).toHaveBeenCalledOnce();
+    const descriptorCall = requestJson.mock.calls[0];
+    expect(descriptorCall?.[0]).toBe("GET");
+    expect(descriptorCall?.[1]).toBe("/api/descriptor");
+    expect(typeof descriptorCall?.[3]?.timeoutMs).toBe("number");
+  });
+
+  it("reports a remote without the descriptor route as a legacy environment version", async () => {
+    const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Legacy", baseUrl: "https://legacy.example.test/" } });
+    const remote = addResponse.json<{ id: string }>();
+    appTestContext.remoteClient = fakeRemoteClient({
+      requestJson: () => Promise.resolve({ statusCode: 404, headers: {}, body: { error: "Not Found" } }),
+    });
+
+    const response = await appTestContext.app.inject({ method: "GET", url: `/api/machines/${remote.id}/descriptor` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ id: remote.id, protocolVersion: { major: 0, minor: 0 }, capabilities: {}, status: "offline" });
+  });
+
+  it("maps an unreachable remote descriptor to a gateway error instead of a fake descriptor", async () => {
+    const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Broken", baseUrl: "https://broken.example.test/" } });
+    const remote = addResponse.json<{ id: string }>();
+    appTestContext.remoteClient = fakeRemoteClient({
+      requestJson: () => Promise.reject(new RemoteMachineRequestError("Remote machine request timed out", 504)),
+    });
+
+    const response = await appTestContext.app.inject({ method: "GET", url: `/api/machines/${remote.id}/descriptor` });
+
+    expect(response.statusCode).toBe(504);
+    expect(response.json()).toMatchObject({ error: "Environment descriptor unavailable", machineId: remote.id });
+  });
+
+  it("never exposes stored remote credentials in the catalog", async () => {
+    await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Secret Remote", baseUrl: "https://secret.example.test", token: "token-123", headers: { "X-Test": "secret" } } });
+
+    const response = await appTestContext.app.inject({ method: "GET", url: "/api/machines" });
+    const body = response.json<{ machines: Record<string, unknown>[] }>();
+
+    expect(body.machines).toHaveLength(2);
+    for (const machine of body.machines) {
+      expect(machine).not.toHaveProperty("token");
+      expect(machine).not.toHaveProperty("headers");
+    }
   });
 
   it("adds remote machines without exposing tokens", async () => {

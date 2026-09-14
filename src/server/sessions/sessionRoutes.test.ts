@@ -26,6 +26,7 @@ import type {
   SessionTreeForkResult,
   SessionTreeNavigateRequest,
   SessionUnreadAcknowledgeRequest,
+  SessionTranscriptSnapshot,
   SessionUnreadCatalogSnapshot,
   SessionTreeNavigateResult,
 } from "../../shared/apiTypes.js";
@@ -1016,6 +1017,58 @@ describe("session routes", () => {
     }
   });
 
+  it("returns the atomic transcript snapshot, forwarding workspace context and page bounds", async () => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const eventHub = new SessionEventHub();
+    const routeService = new CapturingRouteSessionService();
+    routeService.transcriptSnapshotResponse = {
+      seq: 12,
+      partial: { role: "assistant", content: [{ type: "text", text: "partial" }] },
+      messages: [{ role: "user", content: "hello" }],
+      start: 0,
+      total: 1,
+    };
+    registerSessionRoutes(routeApp, routeService, eventHub);
+
+    try {
+      const requestCwd = resolve("/repo");
+      const response = await routeApp.inject({ method: "GET", url: `/sessions/session-1/transcript-snapshot?cwd=${encodeURIComponent(requestCwd)}&limit=100` });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        seq: 12,
+        partial: { role: "assistant", content: [{ type: "text", text: "partial" }] },
+        messages: [{ role: "user", content: "hello" }],
+        start: 0,
+        total: 1,
+      });
+      expect(routeService.transcriptSnapshotCalls).toEqual([{ ref: { id: "session-1", cwd: requestCwd }, page: { limit: 100 } }]);
+    } finally {
+      await routeService.dispose();
+      await routeApp.close();
+    }
+  });
+
+  it("maps transcript-snapshot lookup failures to 404", async () => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const eventHub = new SessionEventHub();
+    const routeService = new CapturingRouteSessionService();
+    routeService.transcriptSnapshot = () => Promise.reject(new Error("Session not found"));
+    registerSessionRoutes(routeApp, routeService, eventHub);
+
+    try {
+      const response = await routeApp.inject({ method: "GET", url: `/sessions/missing/transcript-snapshot?cwd=${encodeURIComponent("/repo")}` });
+
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toEqual({ error: "Session not found" });
+    } finally {
+      await routeService.dispose();
+      await routeApp.close();
+    }
+  });
+
   it("maps stream-snapshot lookup failures to 404", async () => {
     const routeApp = Fastify({ logger: false });
     await routeApp.register(fastifyWebsocket);
@@ -1260,6 +1313,8 @@ class CapturingRouteSessionService implements SessionRouteService {
   messagesResponse: MessagePage = { messages: [], start: 0, total: 0 };
   streamSnapshotResponse: SessionStreamSnapshot = { seq: 0, partial: null };
   readonly streamSnapshotCalls: SessionRouteRef[] = [];
+  transcriptSnapshotResponse: SessionTranscriptSnapshot = { seq: 0, partial: null, messages: [], start: 0, total: 0 };
+  readonly transcriptSnapshotCalls: { ref: SessionRouteRef; page: { before?: number; limit?: number } }[] = [];
   readonly cleanupPreviewCalls: NormalizedSessionCleanupRequest[] = [];
   readonly cleanupCalls: NormalizedSessionCleanupRequest[] = [];
   readonly bulkArchiveCalls: SessionBulkMutationRef[][] = [];
@@ -1421,6 +1476,11 @@ class CapturingRouteSessionService implements SessionRouteService {
   streamSnapshot(lookup: SessionRouteRef): Promise<SessionStreamSnapshot> {
     this.streamSnapshotCalls.push(lookup);
     return Promise.resolve(this.streamSnapshotResponse);
+  }
+
+  transcriptSnapshot(ref: SessionRouteRef, page: { before?: number; limit?: number } = {}): Promise<SessionTranscriptSnapshot> {
+    this.transcriptSnapshotCalls.push({ ref, page });
+    return Promise.resolve(this.transcriptSnapshotResponse);
   }
 
   availableModels(): Promise<[]> { return Promise.resolve([]); }

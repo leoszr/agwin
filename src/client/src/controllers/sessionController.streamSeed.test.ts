@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { initialAppState } from "../appState";
 import { SessionController } from "./sessionController";
 import { defaultApi, deferred, EmitSocket, oldSession, runPendingAnimationFrames, status, workspace, type AppState, type MessagePage, type SessionInfo, type SessionStatus, type SessionStreamSnapshot } from "./sessionController.testSupport";
@@ -33,6 +33,54 @@ describe("SessionController stream seed + watermark reconciliation", () => {
     ]);
     // The seeded partial must never be written to the raw history cache.
     expect(controller).toBeDefined();
+  });
+
+  it("reads the join transcript through the injected environment runtime instead of the direct API", async () => {
+    const socket = new EmitSocket();
+    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [oldSession] };
+    const directMessages = vi.fn(() => Promise.reject(new Error("direct messages must not be used")));
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      messages: directMessages,
+      streamSnapshot: () => { throw new Error("direct stream snapshot must not be used"); },
+      status: () => Promise.resolve(status(oldSession.id)),
+      thinkingLevels: () => Promise.resolve({ levels: [] }),
+    };
+    const environment = {
+      fetchSessionTranscript: vi.fn(async (
+        _machineId: string,
+        _session: unknown,
+        install?: (transcript: { page: MessagePage; stream: SessionStreamSnapshot }) => void | Promise<void>,
+      ) => {
+        const transcript = {
+          page: { messages: [{ role: "user", content: "question" }], start: 0, total: 1 },
+          stream: { seq: 4, partial: assistantPartial("seeded through the runtime") },
+        };
+        await install?.(transcript);
+        // The runtime releases its interval only after install returns; a live
+        // event delivered now must land on top of the installed seed instead of
+        // being overwritten by it.
+        socket.emit({ type: "assistant.delta", text: " after-install", seq: 5 });
+        return transcript;
+      }),
+    };
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      { api, socket, environment },
+    );
+
+    await controller.selectSession(oldSession, { updateUrl: false });
+    runPendingAnimationFrames();
+
+    expect(environment.fetchSessionTranscript).toHaveBeenCalledWith("local", expect.objectContaining({ id: oldSession.id }), expect.any(Function));
+    expect(directMessages).not.toHaveBeenCalled();
+    expect(state.messages).toEqual([
+      { role: "user", parts: [{ type: "text", text: "question" }] },
+      { role: "assistant", parts: [{ type: "text", text: "seeded through the runtime after-install" }] },
+    ]);
   });
 
   it("drops live events at or below the watermark and applies later events exactly once", async () => {
@@ -215,5 +263,49 @@ describe("SessionController stream seed + watermark reconciliation", () => {
       { role: "user", parts: [{ type: "text", text: "question" }] },
       { role: "assistant", parts: [{ type: "text", text: "new turn" }] },
     ]);
+  });
+
+  it("does not apply the transcript seed when isCurrent returns false after status resolves", async () => {
+    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [oldSession] };
+    const socket = new EmitSocket();
+    let statusResolver: ((s: SessionStatus) => void) | undefined;
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      messages: () => { throw new Error("must not be called"); },
+      streamSnapshot: () => { throw new Error("must not be called"); },
+      status: () => new Promise<SessionStatus>((resolve) => { statusResolver = resolve; }),
+      thinkingLevels: () => Promise.resolve({ levels: [] }),
+    };
+
+    let isCurrentValue = true;
+    const environment = {
+      fetchSessionTranscript: vi.fn(async (
+        _machineId: string,
+        _session: unknown,
+        install?: (transcript: { page: MessagePage; stream: SessionStreamSnapshot }, isCurrent: () => boolean) => void | Promise<void>,
+      ) => {
+        const transcript = {
+          page: { messages: [{ role: "user", content: "stale-user" }], start: 0, total: 1 },
+          stream: { seq: 4, partial: null },
+        };
+        const installPromise = install?.(transcript, () => isCurrentValue);
+        // Epoch changed / transport loss happened while status was pending!
+        isCurrentValue = false;
+        statusResolver?.(status(oldSession.id));
+        await installPromise;
+        return transcript;
+      }),
+    };
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      { api, socket, environment },
+    );
+
+    await controller.selectSession(oldSession, { updateUrl: false });
+    // Since isCurrent returned false after status resolved, state.messages must NOT have been overwritten with stale-user!
+    expect(state.messages).toEqual([]);
   });
 });

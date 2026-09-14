@@ -166,6 +166,7 @@ export class DesktopHostSupervisor {
           stdio: "ignore",
           env: {
             ...process.env,
+            ELECTRON_RUN_AS_NODE: "1",
             PI_WEB_PORT: String(port),
           },
         },
@@ -319,19 +320,27 @@ export class DesktopHostSupervisor {
     if (this.options?.healthChecker !== undefined) {
       return this.options.healthChecker(port);
     }
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => {
-        controller.abort();
-      }, 1500);
-      const res = await fetch(`http://127.0.0.1:${String(port)}/api/sessiond/health`, {
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      return res.ok;
-    } catch {
-      return false;
+    const maxAttempts = 15;
+    const intervalMs = 200;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          controller.abort();
+        }, 1000);
+        const res = await fetch(`http://127.0.0.1:${String(port)}/api/sessiond/health`, {
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        if (res.ok) return true;
+      } catch {
+        // Retry while process is booting
+      }
+      if (attempt < maxAttempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      }
     }
+    return false;
   }
 
   private async queryActiveSessionsCount(port: number): Promise<number | undefined> {

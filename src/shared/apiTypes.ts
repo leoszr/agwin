@@ -1312,6 +1312,18 @@ export interface SessionStreamSnapshot {
   partial: unknown;
 }
 
+/**
+ * Join-time snapshot that is coherent by construction: the committed message
+ * page, the stream watermark, and the in-flight partial are captured in one
+ * tick by the session owner. A client seeds the page and partial, then applies
+ * only buffered live events with `seq > snapshot.seq` (exactly-once).
+ */
+export interface SessionTranscriptSnapshot extends MessagePage {
+  seq: number;
+  /** Browser-projected in-flight `AssistantMessage`, or `null` when idle. */
+  partial: unknown;
+}
+
 export type CommandResult =
   | { type: "done"; message?: string; session?: SessionInfo; promptDraft?: string }
   | { type: "select"; requestId: string; title: string; options: CommandOption[] }

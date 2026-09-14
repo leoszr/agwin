@@ -25,3 +25,4 @@ reports/
 
 # Local Pi harness state
 .pi/
+dist-electron/

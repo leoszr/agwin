@@ -17,6 +17,7 @@ import { isSessionActive } from "../../../shared/activity";
 import type { PromptAttachmentDelivery, SessionNotificationInboxEvent, SessionStartupProgressEvent } from "../../../shared/apiTypes";
 import { InMemorySessionSelectionMemory, markSessionArchived, markSessionsArchived, selectPreferredSession, selectionAfterArchivingSession, selectionAfterArchivingSessions, shouldDeselectAfterArchivedCollapse, type SessionSelectionMemory } from "./sessionSelection";
 import { selectedMachineId, type GetState, type NavigationDestinationOptions, type NavigationFreshness, type NavigationScope, type NavigationSelection, type SetState, type UpdateUrl } from "./types";
+import { readCoherentTranscriptSnapshot } from "../transcriptSnapshot";
 import { TrailingRefreshCoordinator } from "./trailingRefreshCoordinator";
 
 const MESSAGE_PAGE_SIZE = 100;
@@ -30,9 +31,33 @@ export interface SessionEventSocket {
     onReconnect?: () => void,
     machineId?: string,
     onInitialOpen?: () => void,
+    /** Unexpected drop of the transport; the socket owns retrying it. */
+    onDisconnect?: (reason: string) => void,
   ): void;
   setHandler(onEvent: (event: SessionUiEvent) => void): void;
   close(): void;
+}
+
+/** Transcript seed handed to the refresh that is installing it. */
+export interface SessionTranscriptSeed {
+  page: MessagePage;
+  stream: SessionStreamSnapshot;
+}
+
+export type SessionTranscriptResult = SessionTranscriptSeed | "superseded";
+
+/** Environment runtime surface a host injects to route session reads through it. */
+export interface SessionEnvironmentRuntime {
+  /**
+   * `install` runs inside the runtime's snapshot interval, before events
+   * buffered during the fetch are released, so the consumer's state and
+   * watermark are in place before any racing event is applied.
+   */
+  fetchSessionTranscript(
+    machineId: string,
+    session: SessionRef,
+    install?: (transcript: SessionTranscriptSeed, isCurrent?: () => boolean) => void | Promise<void>,
+  ): Promise<SessionTranscriptResult>;
 }
 
 export interface SessionNotificationSessionBridge {
@@ -58,6 +83,8 @@ export interface SessionControllerDependencies {
   captureNavigation?: () => NavigationSelection;
   beginNavigationOperation?: (scope: readonly NavigationScope[]) => NavigationFreshness;
   socket?: SessionEventSocket;
+  /** When present, transcript seeds are fetched through the client runtime. */
+  environment?: SessionEnvironmentRuntime;
   transcripts?: ChatTranscriptStore;
   notifications?: SessionNotificationSessionBridge;
   navigateToSession?: (session: SessionInfo | undefined, options?: NavigationDestinationOptions) => Promise<boolean>;
@@ -125,6 +152,7 @@ export interface SessionSelectionOptions {
 export class SessionController {
   private readonly socket: SessionEventSocket;
   private readonly api: typeof defaultApi;
+  private readonly environment: SessionEnvironmentRuntime | undefined;
   private readonly transcripts: ChatTranscriptStore;
   private readonly notifications: SessionNotificationSessionBridge | undefined;
   private readonly navigateToSession: SessionControllerDependencies["navigateToSession"];
@@ -168,6 +196,7 @@ export class SessionController {
   ) {
     this.socket = deps.socket ?? new SessionSocket();
     this.api = deps.api ?? defaultApi;
+    this.environment = deps.environment;
     this.transcripts = deps.transcripts ?? new ChatTranscriptStore();
     this.notifications = deps.notifications;
     this.navigateToSession = deps.navigateToSession;
@@ -1288,32 +1317,66 @@ export class SessionController {
     return this.selectedSessionRefreshes.request(key, async () => {
       if (!this.isCurrentRefreshTarget(target)) return;
       this.flushPendingUpdates();
-      const [page, status, streamSnapshot] = await Promise.all([
-        this.api.messages(target.session, { limit: MESSAGE_PAGE_SIZE }, target.machineId),
-        this.api.status(target.session, target.machineId),
-        this.api.streamSnapshot(target.session, target.machineId),
+      const statusPromise = this.api.status(target.session, target.machineId);
+      // Settled here so a transcript failure below cannot leave a status or
+      // notification rejection unobserved, while the install still awaits the
+      // real status value and surfaces its failure as this refresh's result.
+      const supporting = Promise.allSettled([
+        statusPromise,
         this.notifications?.refreshSelectedSession(target.session, target.machineId) ?? Promise.resolve(),
       ]);
-      if (!this.isCurrentRefreshTarget(target)) return;
-      if (this.isUnchangedSelectedRefresh(target, key, page, status, streamSnapshot)) return;
-      // Seed the in-flight partial assistant message on top of committed history
-      // and record the snapshot's sequence as the watermark. Buffered/live events
-      // with `seq <= watermark` are already reflected here and are dropped by
-      // `applyEvent`; later events (`seq > watermark`) stream in on top. The
-      // partial is seeded into the in-memory transcript only, never the raw
-      // history cache, so it never persists.
-      const history = this.transcripts.mergeHistory(key, page);
-      const messages = this.transcripts.seedStreamingPartial(history.messages, streamSnapshot.partial);
-      this.streamWatermark = { sessionId: target.session.id, seq: streamSnapshot.seq };
-      this.setState({
-        ...history,
-        messages,
-        status,
-        activity: this.getState().sessionActivities[target.session.id],
+      // The install runs inside the environment runtime's snapshot interval when
+      // one is injected: the seed and watermark land before the events buffered
+      // during the fetch are released, so no event can be applied to, or
+      // overwritten by, the wrong transcript revision.
+      await this.loadTranscriptSeed(target, async (transcript, isCurrent) => {
+        const status = await statusPromise;
+        if (isCurrent !== undefined && !isCurrent()) return;
+        if (!this.isCurrentRefreshTarget(target)) return;
+        if (this.isUnchangedSelectedRefresh(target, key, transcript.page, status, transcript.stream)) return;
+        // Seed the in-flight partial assistant message on top of committed history
+        // and record the snapshot's sequence as the watermark. Buffered/live events
+        // with `seq <= watermark` are already reflected here and are dropped by
+        // `applyEvent`; later events (`seq > watermark`) stream in on top. The
+        // partial is seeded into the in-memory transcript only, never the raw
+        // history cache, so it never persists.
+        const history = this.transcripts.mergeHistory(key, transcript.page);
+        const messages = this.transcripts.seedStreamingPartial(history.messages, transcript.stream.partial);
+        this.streamWatermark = { sessionId: target.session.id, seq: transcript.stream.seq };
+        this.setState({
+          ...history,
+          messages,
+          status,
+          activity: this.getState().sessionActivities[target.session.id],
+        });
+        this.applyStatus(status);
+        this.lastAppliedSelectedRefresh = { selectionSeq: target.selectionSeq, partialJson: selectedRefreshPartialJson(transcript.stream) };
       });
-      this.applyStatus(status);
-      this.lastAppliedSelectedRefresh = { selectionSeq: target.selectionSeq, partialJson: selectedRefreshPartialJson(streamSnapshot) };
+      await supporting;
     });
+  }
+
+  /**
+   * Transcript seed for one refresh. With an environment runtime the gateway
+   * page and stream snapshot are read through it and `install` runs inside the
+   * runtime's interval. A host without one keeps the direct gateway calls and
+   * installs inline; both use the same watermark-before/after coherence rule.
+   */
+  private async loadTranscriptSeed(
+    target: SelectedSessionRefreshTarget,
+    install: (transcript: SessionTranscriptSeed, isCurrent?: () => boolean) => void | Promise<void>,
+  ): Promise<void> {
+    if (this.environment === undefined) {
+      const { stream, page } = await readCoherentTranscriptSnapshot({
+        readStream: () => this.api.streamSnapshot(target.session, target.machineId),
+        readPage: () => this.api.messages(target.session, { limit: MESSAGE_PAGE_SIZE }, target.machineId),
+        seqOf: (snapshot) => snapshot.seq,
+      });
+      await install({ page, stream }, () => true);
+      return;
+    }
+    const transcript = await this.environment.fetchSessionTranscript(target.machineId, target.session, install);
+    if (transcript === "superseded") return;
   }
 
   /**

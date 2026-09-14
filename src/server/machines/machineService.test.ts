@@ -3,7 +3,9 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PiWebRuntimeResponse } from "../../shared/apiTypes.js";
+import { CURRENT_PROTOCOL_VERSION, type EnvironmentDescriptor } from "../../shared/protocol/contracts.js";
 import type { MachineClient } from "./machineClient.js";
+import { RemoteMachineRequestError } from "./machineClient.js";
 import { MachineService } from "./machineService.js";
 import { MachineStore, machineStorePath } from "./machineStore.js";
 
@@ -271,6 +273,85 @@ describe("MachineService", () => {
   it("supports PI_WEB_MACHINES_FILE path overrides", () => {
     const env: NodeJS.ProcessEnv = { PI_WEB_MACHINES_FILE: "data/machines.json" };
     expect(machineStorePath(env, "/tmp/pi-web")).toBe(resolve("/tmp/pi-web", "data/machines.json"));
+  });
+});
+
+describe("MachineService environment descriptor", () => {
+  it("builds the local descriptor from the live runtime instead of a stored value", async () => {
+    const localRuntime = vi.fn(() => Promise.resolve(remoteRuntimeBody()));
+    const descriptorService = new MachineService(new MachineStore(storePath), { localRuntime });
+
+    const descriptor = await descriptorService.descriptor("local");
+
+    expect(descriptor).toMatchObject({
+      id: "local",
+      name: "Local",
+      kind: "local",
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      status: "connected",
+      capabilities: { streaming: true, replayCursor: true },
+    });
+    expect(localRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("adopts the remote environment's own descriptor with the gateway machine identity", async () => {
+    const machine = await service.add({ name: "Remote", baseUrl: "https://remote.example.test" });
+    const remoteDescriptor: EnvironmentDescriptor = {
+      id: "local",
+      name: "Remote self",
+      kind: "local",
+      protocolVersion: { major: 1, minor: 2 },
+      capabilities: { streaming: true, replayCursor: true, agentRuntime: "pi" },
+      status: "connected",
+    };
+    const descriptorService = new MachineService(new MachineStore(storePath), {
+      remoteClientFactory: () => fakeRemoteClient({
+        requestJson: (method, path) => {
+          expect(method).toBe("GET");
+          expect(path).toBe("/api/descriptor");
+          return Promise.resolve({ statusCode: 200, headers: {}, body: remoteDescriptor });
+        },
+      }),
+    });
+
+    const descriptor = await descriptorService.descriptor(machine.id);
+
+    expect(descriptor).toEqual({
+      ...remoteDescriptor,
+      id: machine.id,
+      name: "Remote",
+      kind: "remote",
+    });
+  });
+
+  it("reports a remote without descriptor support as a legacy environment instead of failing", async () => {
+    const machine = await service.add({ name: "Legacy", baseUrl: "https://legacy.example.test" });
+    const descriptorService = new MachineService(new MachineStore(storePath), {
+      remoteClientFactory: () => fakeRemoteClient({
+        requestJson: () => Promise.resolve({ statusCode: 404, headers: {}, body: { error: "Not Found" } }),
+      }),
+    });
+
+    await expect(descriptorService.descriptor(machine.id)).resolves.toMatchObject({
+      id: machine.id,
+      kind: "remote",
+      protocolVersion: { major: 0, minor: 0 },
+      capabilities: {},
+      status: "offline",
+    });
+  });
+
+  it("reports an unknown machine as undefined and a failing remote as a gateway error", async () => {
+    const descriptorService = new MachineService(new MachineStore(storePath), {
+      remoteClientFactory: () => fakeRemoteClient({
+        requestJson: () => Promise.reject(new RemoteMachineRequestError("Remote machine request timed out", 504)),
+      }),
+    });
+
+    await expect(descriptorService.descriptor("missing")).resolves.toBeUndefined();
+
+    const machine = await service.add({ name: "Broken", baseUrl: "https://broken.example.test" });
+    await expect(descriptorService.descriptor(machine.id)).rejects.toMatchObject({ statusCode: 504 });
   });
 });
 

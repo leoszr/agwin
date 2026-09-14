@@ -157,9 +157,9 @@ describe("SessionController selected-session refresh", () => {
 
     const first = controller.refreshSelectedSession();
     const duplicate = controller.refreshSelectedSession();
-    await Promise.resolve();
-
-    expect(messageCalls).toBe(1);
+    // The refresh reads the stream watermark before the committed page, so the
+    // page request lands a microtask after the status request.
+    await vi.waitFor(() => { expect(messageCalls).toBe(1); });
     expect(statusCalls).toBe(1);
 
     const later = controller.refreshSelectedSession();
@@ -238,7 +238,8 @@ describe("SessionController selected-session refresh", () => {
 
     await controller.refreshSelectedSession();
 
-    expect(snapshotLookups).toEqual([oldSession.id]);
+    // The watermark brackets the page read, so a coherent join reads it twice.
+    expect(snapshotLookups).toEqual([oldSession.id, oldSession.id]);
   });
 });
 
@@ -406,27 +407,33 @@ describe("SessionController unchanged selected-session refresh", () => {
     return { page: page("idle", 1), sessionStatus: { ...status(oldSession.id), messageCount: 1 }, snapshot: { seq: 4, partial: null } };
   }
 
-  // The refresh invokes messages/status/streamSnapshot in order per poll, so the
-  // poll index advances on the last of the three.
+  // One refresh reads status once and the transcript as watermark, page,
+  // watermark; they may be requested in any order. The poll index advances once
+  // all four have been consumed, so each refresh sees exactly one poll.
   function controllerWithPolls(polls: RefreshPoll[]) {
     const cacheWrites: string[] = [];
     let pollCalls = 0;
+    let callsThisPoll = 0;
     let setStateCalls = 0;
     const poll = (): RefreshPoll => {
       const current = polls[Math.min(pollCalls, polls.length - 1)];
       if (current === undefined) throw new Error("controllerWithPolls requires at least one poll");
       return current;
     };
+    const consume = <T>(value: T): T => {
+      callsThisPoll += 1;
+      if (callsThisPoll >= 4) {
+        callsThisPoll = 0;
+        pollCalls += 1;
+      }
+      return value;
+    };
     let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, selectedSession: oldSession, sessions: [oldSession] };
     const api: typeof defaultApi = {
       ...defaultApi,
-      messages: () => Promise.resolve(poll().page),
-      status: () => Promise.resolve(poll().sessionStatus),
-      streamSnapshot: () => {
-        const snapshot = poll().snapshot;
-        pollCalls += 1;
-        return Promise.resolve(snapshot);
-      },
+      messages: () => Promise.resolve(consume(poll().page)),
+      status: () => Promise.resolve(consume(poll().sessionStatus)),
+      streamSnapshot: () => Promise.resolve(consume(poll().snapshot)),
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     };
     const controller = new SessionController(

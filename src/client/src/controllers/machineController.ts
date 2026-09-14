@@ -1,18 +1,35 @@
 import { api, type Machine, type MachineHealth, type MachineRuntime } from "../api";
 import { resetWorkspaceScopedState } from "../appState";
+import type { WebEnvironmentStatus } from "../controlSurface/webEnvironmentRuntime";
 import { BrowserErrorReporter, machineBrowserErrorScope } from "../browserErrors";
 import type { GetState, NavigationDestinationOptions, NavigationSelection, SetState, UpdateUrl } from "./types";
 import type { ProjectController } from "./projectController";
 
+/**
+ * Client runtime surface the controller drives: catalog loading plus the
+ * per-environment connection state the navigation renders. Injectable so tests
+ * can supply projections without a gateway.
+ */
+export interface MachineEnvironmentRuntime {
+  refreshCatalog(): Promise<Machine[]>;
+  connectEnvironment(machineId: string): Promise<void>;
+  removeEnvironment(machineId: string): void;
+  getStatus(machineId: string): WebEnvironmentStatus;
+  statuses(): Record<string, WebEnvironmentStatus>;
+  onStatusChange(listener: (status: WebEnvironmentStatus) => void): () => void;
+}
+
 export interface MachineControllerDependencies {
   navigateToMachine?: (machine: Machine, options?: NavigationDestinationOptions) => Promise<boolean>;
   captureNavigation?: () => NavigationSelection;
+  environmentRuntime?: MachineEnvironmentRuntime;
 }
 
 export class MachineController {
   private readonly runtimeRefreshSeqByMachine = new Map<string, number>();
   private readonly navigateToMachine: MachineControllerDependencies["navigateToMachine"];
   private readonly captureNavigation: MachineControllerDependencies["captureNavigation"];
+  private readonly environmentRuntime: MachineEnvironmentRuntime | undefined;
   private readonly browserErrors: BrowserErrorReporter;
 
   constructor(
@@ -24,13 +41,17 @@ export class MachineController {
   ) {
     this.navigateToMachine = deps.navigateToMachine;
     this.captureNavigation = deps.captureNavigation;
+    this.environmentRuntime = deps.environmentRuntime;
     this.browserErrors = new BrowserErrorReporter(getState, setState);
+    // Connection state changes on its own schedule (reconnects, protocol
+    // blocking), so the navigation renders it as soon as it changes.
+    this.environmentRuntime?.onStatusChange(() => { this.syncEnvironmentStatuses(); });
   }
 
   async loadMachines(routeMachineId?: string): Promise<void> {
     this.setState({ error: "", isLoadingMachines: true });
     try {
-      const machines = await api.machines();
+      const machines = this.environmentRuntime === undefined ? await api.machines() : await this.environmentRuntime.refreshCatalog();
       const selectedMachine = await this.selectInitialMachine(machines, routeMachineId);
       const machineIds = new Set(machines.map((machine) => machine.id));
       for (const error of Object.values(this.getState().browserErrors)) {
@@ -42,6 +63,7 @@ export class MachineController {
         machineRuntimes: filterKeys(this.getState().machineRuntimes, machineIds),
         machineStatusSnapshots: filterKeys(this.getState().machineStatusSnapshots, machineIds),
       });
+      this.syncEnvironmentStatuses();
       void this.refreshMachineHealthFor(machines);
       void this.refreshMachineRuntimeFor(machines);
     } catch (error) {
@@ -53,6 +75,12 @@ export class MachineController {
 
   async selectMachine(machine: Machine, options: { updateUrl?: boolean | undefined } = {}): Promise<void> {
     if (this.getState().selectedMachine?.id === machine.id) return;
+    await this.connectEnvironment(machine.id);
+    const environmentStatus = this.environmentRuntime?.getStatus(machine.id);
+    if (environmentStatus?.state === "blocked") {
+      this.browserErrors.report(machineBrowserErrorScope(machine.id), blockedEnvironmentMessage(machine, environmentStatus));
+      return;
+    }
     this.setState({
       selectedMachine: machine,
       projects: [],
@@ -85,6 +113,9 @@ export class MachineController {
     try {
       const machine = await api.addMachine(input);
       this.setState({ machines: [...this.getState().machines.filter((candidate) => candidate.id !== machine.id), machine] });
+      // Register the new environment with the runtime before selecting it, so
+      // its connection and status exist even if navigation does not open it.
+      await this.connectEnvironment(machine.id);
       if (this.navigateToMachine !== undefined) await this.navigateToMachine(machine, { expected });
       else await this.selectMachine(machine);
       return machine;
@@ -102,16 +133,24 @@ export class MachineController {
     }
     try {
       await api.deleteMachine(machine.id);
+      // Drop the environment's connection, reconnect timer, and projection
+      // before it can resurface through the runtime's status list.
+      this.environmentRuntime?.removeEnvironment(machine.id);
       const machines = this.getState().machines.filter((candidate) => candidate.id !== machine.id);
-      const local = machines.find((candidate) => candidate.id === "local") ?? machines[0];
+      const local = this.usableMachine(machines);
       this.browserErrors.discard(machineBrowserErrorScope(machine.id));
-      this.setState({ machines, machineStatuses: omitKey(this.getState().machineStatuses, machine.id), machineRuntimes: omitKey(this.getState().machineRuntimes, machine.id), machineStatusSnapshots: omitKey(this.getState().machineStatusSnapshots, machine.id) });
+      this.setState({ machines, machineStatuses: omitKey(this.getState().machineStatuses, machine.id), machineRuntimes: omitKey(this.getState().machineRuntimes, machine.id), machineStatusSnapshots: omitKey(this.getState().machineStatusSnapshots, machine.id), environmentStatuses: omitKey(this.getState().environmentStatuses, machine.id) });
       if (this.getState().selectedMachine?.id === machine.id && local !== undefined) {
         if (options.selectFallback === false) return local;
         const expected = navigationSelection(this.getState(), this.captureNavigation);
         if (this.navigateToMachine !== undefined) await this.navigateToMachine(local, { expected });
         else await this.selectMachine(local);
         return local;
+      }
+      if (this.getState().selectedMachine?.id === machine.id) {
+        // No usable fallback (every remaining environment is blocked): leave
+        // nothing selected instead of pointing at a machine that no longer exists.
+        this.setState({ selectedMachine: undefined, ...resetWorkspaceScopedState() });
       }
       return undefined;
     } catch (error) {
@@ -146,14 +185,26 @@ export class MachineController {
   }
 
   private async selectInitialMachine(machines: Machine[], routeMachineId?: string): Promise<Machine | undefined> {
-    const requestedMachine = machines.find((machine) => machine.id === (routeMachineId ?? "local"));
-    if (requestedMachine === undefined) return this.localMachine(machines);
-    if (requestedMachine.kind !== "remote") return requestedMachine;
+    const targetId = routeMachineId ?? "local";
+    const requestedMachine = machines.find((machine) => machine.id === targetId);
+    const candidates = requestedMachine !== undefined
+      ? [requestedMachine, ...machines.filter((m) => m.id !== requestedMachine.id)]
+      : machines;
 
-    const health = await this.safeRemoteHealth(requestedMachine);
-    this.setState({ machineStatuses: { ...this.getState().machineStatuses, [health.machineId]: health } });
-    if (!health.ok) this.browserErrors.report(machineBrowserErrorScope(requestedMachine.id), `${requestedMachine.name} is unavailable; reconnecting…`);
-    return requestedMachine;
+    for (const candidate of candidates) {
+      await this.connectEnvironment(candidate.id);
+      const status = this.environmentRuntime?.getStatus(candidate.id);
+      if (status?.state === "blocked") {
+        this.browserErrors.report(machineBrowserErrorScope(candidate.id), blockedEnvironmentMessage(candidate, status));
+        continue;
+      }
+      if (candidate.kind !== "remote") return candidate;
+      const health = await this.safeRemoteHealth(candidate);
+      this.setState({ machineStatuses: { ...this.getState().machineStatuses, [health.machineId]: health } });
+      if (!health.ok) this.browserErrors.report(machineBrowserErrorScope(candidate.id), `${candidate.name} is unavailable; reconnecting…`);
+      return candidate;
+    }
+    return undefined;
   }
 
   private async safeRemoteHealth(machine: Machine): Promise<MachineHealth> {
@@ -170,8 +221,31 @@ export class MachineController {
     }
   }
 
-  private localMachine(machines: Machine[]): Machine | undefined {
-    return machines.find((machine) => machine.id === "local") ?? machines[0];
+  private async connectEnvironment(machineId: string): Promise<void> {
+    if (this.environmentRuntime === undefined) return;
+    try {
+      await this.environmentRuntime.connectEnvironment(machineId);
+    } catch {
+      // A machine that cannot be reached yet still exists in the catalog; the
+      // runtime reports the offline status and retries on its own schedule.
+    } finally {
+      this.syncEnvironmentStatuses();
+    }
+  }
+
+  /**
+   * First machine a blocked-environment fallback may use: local is preferred
+   * only when the runtime does not already know it is protocol-blocked.
+   */
+  private usableMachine(machines: Machine[]): Machine | undefined {
+    const local = machines.find((machine) => machine.id === "local");
+    if (local !== undefined && this.environmentRuntime?.getStatus(local.id).state !== "blocked") return local;
+    return machines.find((machine) => this.environmentRuntime?.getStatus(machine.id).state !== "blocked");
+  }
+
+  private syncEnvironmentStatuses(): void {
+    if (this.environmentRuntime === undefined) return;
+    this.setState({ environmentStatuses: this.environmentRuntime.statuses() });
   }
 
   private async refreshMachineHealthFor(machines: Machine[]): Promise<void> {
@@ -185,6 +259,11 @@ export class MachineController {
     const runtimes = Object.fromEntries(results.flatMap((result) => result.status === "fulfilled" ? [[result.value.machineId, result.value] as const] : []));
     if (Object.keys(runtimes).length > 0) this.setState({ machineRuntimes: { ...this.getState().machineRuntimes, ...runtimes } });
   }
+}
+
+function blockedEnvironmentMessage(machine: Machine, status: WebEnvironmentStatus): string {
+  const detail = status.error?.message ?? "the protocol version is not supported";
+  return `${machine.name} is incompatible with this client: ${detail}`;
 }
 
 function omitKey<T>(record: Record<string, T>, keyToOmit: string): Record<string, T> {

@@ -1,7 +1,9 @@
 import type { Machine, MachineHealth, MachineRuntime, PiWebComponentStatus, PiWebDeprecatedAgentInput, PiWebRuntimeComponent, PiWebRuntimeResponse, PiWebStatusResponse } from "../../shared/apiTypes.js";
 import { parsePiWebRuntimeResponse } from "../../shared/piWebStatusParsing.js";
 import { getPiWebRuntime } from "../piWebStatus.js";
-import { DEFAULT_REMOTE_HEALTH_TIMEOUT_MS, RemoteMachineClient, type MachineClient, validateConfiguredMachineHeaders } from "./machineClient.js";
+import { parseEnvironmentDescriptor, type EnvironmentDescriptor } from "../../shared/protocol/contracts.js";
+import { legacyEnvironmentDescriptor, localEnvironmentDescriptor } from "./environmentDescriptor.js";
+import { DEFAULT_REMOTE_HEALTH_TIMEOUT_MS, RemoteMachineClient, RemoteMachineRequestError, type MachineClient, validateConfiguredMachineHeaders } from "./machineClient.js";
 import { MachineStore, type StoredMachine } from "./machineStore.js";
 
 export interface CreateMachineInput {
@@ -102,6 +104,33 @@ export class MachineService {
     if (runtime === undefined) return undefined;
     this.runtimeCache.set(id, { expiresAt: now + (this.deps.runtimeCacheTtlMs ?? DEFAULT_HEALTH_CACHE_TTL_MS), runtime });
     return runtime;
+  }
+
+  /**
+   * Versioned descriptor for one environment. A remote that answers 404 has no
+   * versioned descriptor at all, so it is reported as a legacy environment the
+   * client's major-version gate blocks rather than as an unrelated failure.
+   */
+  async descriptor(id: string): Promise<EnvironmentDescriptor | undefined> {
+    if (id === "local") return this.localDescriptor();
+    const machine = await this.storedRemote(id);
+    if (machine === undefined) return undefined;
+    try {
+      const response = await this.clientFor(machine).requestJson("GET", "/api/descriptor", undefined, { timeoutMs: DEFAULT_REMOTE_HEALTH_TIMEOUT_MS });
+      if (response.statusCode === 404) return legacyEnvironmentDescriptor(machine);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw new RemoteMachineRequestError(`Remote environment descriptor returned HTTP ${String(response.statusCode)}`, 502);
+      }
+      const descriptor = parseEnvironmentDescriptor(response.body);
+      return { ...descriptor, id: machine.id, name: machine.name, kind: "remote" };
+    } catch (error) {
+      if (error instanceof RemoteMachineRequestError) throw error;
+      throw new RemoteMachineRequestError(`Remote environment descriptor unavailable: ${errorMessage(error)}`, 502);
+    }
+  }
+
+  async localDescriptor(): Promise<EnvironmentDescriptor> {
+    return localEnvironmentDescriptor(await (this.deps.localRuntime ?? getPiWebRuntime)());
   }
 
   private async localHealth(): Promise<MachineHealth> {
