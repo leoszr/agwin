@@ -4,10 +4,16 @@
 
 **Blocked by:** 20/Estabelecer a base funcional do PI WEB
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] O Web obtém o catálogo e conecta ao Ambiente selecionado sem receber credenciais remotas.
-- [ ] Snapshot, eventos e identidade da Session permanecem consistentes após reconexão.
-- [ ] Reiniciar UI/API não encerra a execução mantida pelo Ambiente.
-- [ ] Versão, capabilities e erros incompatíveis produzem degradação ou bloqueio previsível.
-- [ ] A falha de um Ambiente não invalida projeções de outros Ambientes.
+- [x] O Web obtém o catálogo e conecta ao Ambiente selecionado sem receber credenciais remotas.
+- [x] Snapshot, eventos e identidade da Session permanecem consistentes após reconexão.
+- [x] Reiniciar UI/API não encerra a execução mantida pelo Ambiente.
+- [x] Versão, capabilities e erros incompatíveis produzem degradação ou bloqueio previsível.
+- [x] A falha de um Ambiente não invalida projeções de outros Ambientes.
+
+## Resultado
+
+Implementação entregue no commit `efa794d` junto do Desktop (22) e Files (23): `src/client/runtime/` (`ClientRuntime`, `EnvironmentConnection`), `src/client/src/controlSurface/` (`WebEnvironmentRuntime`, `RuntimeSessionSocket`), descriptor versionado em `src/server/machines/environmentDescriptor.ts` e contratos em `src/shared/protocol/contracts.ts`. Credenciais remotas permanecem no gateway via `MachineService`.
+
+Verificação executada em 2026-09-14: `vitest run` sobre `src/client/src/controlSurface`, `src/client/runtime`, `PiWebApp.environmentRuntime.test.ts`, `environmentDescriptor.test.ts` e `contracts.test.ts` — 6 arquivos, 44 testes passaram. Catalogo/conexão independente, bloqueio por major incompatível, isolamento de falha por Ambiente e consistência snapshot/eventos são fixados nesses testes; persistência da execução no reinício da UI/API é o probe registrado em [`docs/baseline.md`](../../../docs/baseline.md).
