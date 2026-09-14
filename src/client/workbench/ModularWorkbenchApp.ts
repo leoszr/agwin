@@ -2,7 +2,7 @@ import { WorkbenchPanelRegistry } from "./panelRegistry";
 import { serializeWorkbenchLayout } from "./layoutStorage";
 import { AccessibleWorkbenchController } from "./accessibleActions";
 import { FilesDockviewPanel, type FilesPanelOptions } from "./FilesDockviewPanel";
-import { DiffDockviewPanel } from "./DiffDockviewPanel";
+import { DiffDockviewPanel, type DiffService } from "./DiffDockviewPanel";
 import { TerminalDockviewPanel } from "./TerminalDockviewPanel";
 import { ModularChatPanel } from "./ModularChatPanel";
 import { ProjectExplorer, type ProjectExplorerProject } from "../explorer/ProjectExplorer";
@@ -27,6 +27,7 @@ export interface ModularWorkbenchAppOptions {
   files?: FilesPanelOptions["files"];
   api?: FilesPanelOptions["api"];
   fileService?: FilesPanelOptions["fileService"] | undefined;
+  diffService?: DiffService | undefined;
   initialWorkspace: WorkspaceContext;
   projects: ProjectExplorerProject[];
   threads: Thread[];
@@ -190,6 +191,7 @@ export class ModularWorkbenchApp {
       id: panelId,
       context: this.activeWorkspace,
       mode,
+      diffService: this.options.diffService,
     });
     this.registry.registerPanel(panel.state, panel);
     return panel;

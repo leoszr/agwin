@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ModularWorkbenchApp } from "./ModularWorkbenchApp";
 import { ClientRuntime } from "../runtime/ClientRuntime";
 import { CURRENT_PROTOCOL_VERSION } from "../../shared/protocol/contracts";
@@ -49,6 +49,11 @@ describe("ModularWorkbenchApp Integration & Legacy Path Cut (Ticket 33)", () => 
       deleteWorkspaceFile: vi.fn(() => Promise.resolve({ path: "src/index.ts", existed: true })),
       moveWorkspaceFile: vi.fn(() => Promise.resolve({ fromPath: "", toPath: "", size: 0, modifiedAt: "" })),
     };
+  });
+
+  afterEach(() => {
+    document.body.replaceChildren();
+    localStorage.clear();
   });
 
   it("composes Explorer, Chat, and demand panels into a single cohesive control surface", async () => {
@@ -146,6 +151,24 @@ describe("ModularWorkbenchApp Integration & Legacy Path Cut (Ticket 33)", () => 
     expect(result.success).toBe(true);
     expect(movedId).toBe("chat-main");
 
+    app.dispose();
+  });
+
+  it("routes the workspace diff service into opened diff panels", async () => {
+    const getChangedFiles = vi.fn(() => Promise.resolve([]));
+    const app = new ModularWorkbenchApp({
+      container,
+      runtime: clientRuntime,
+      initialWorkspace: initialWs,
+      projects: [{ id: "proj-1", name: "Main Project", environmentId: "local" }],
+      threads: [testThread],
+      diffService: { getChangedFiles, getFileDiff: vi.fn() },
+    });
+
+    const diff = app.openDiffPanel("diff-wired");
+    await diff.reload();
+
+    expect(getChangedFiles).toHaveBeenCalledWith("local", "ws-primary", "proj-1");
     app.dispose();
   });
 });

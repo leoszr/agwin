@@ -7,6 +7,7 @@ import {
 } from "./layoutStorage.js";
 import type { PanelState, WorkspaceContext } from "./types.js";
 import { FilesDockviewPanel, type FilesPanelOptions } from "./FilesDockviewPanel.js";
+import { DiffDockviewPanel, type DiffService } from "./DiffDockviewPanel.js";
 
 export interface DockviewWorkbenchOptions {
   container: HTMLElement;
@@ -101,10 +102,28 @@ export class DockviewWorkbench {
     return panel;
   }
 
+  addDiffPanel(options?: {
+    id?: string;
+    mode?: "following" | "pinned";
+    context?: WorkspaceContext;
+    diffService?: DiffService | undefined;
+  }): DiffDockviewPanel {
+    const panelId = options?.id ?? `diff-${String(Date.now())}`;
+    const panel = new DiffDockviewPanel({
+      id: panelId,
+      context: options?.context ?? this.currentContext,
+      mode: options?.mode ?? "following",
+      diffService: options?.diffService,
+    });
+    this.addPanel(panel.state, panel);
+    return panel;
+  }
+
   restoreSavedLayout(options?: {
     files?: FilesPanelOptions["files"];
     api?: FilesPanelOptions["api"];
     fileService?: FilesPanelOptions["fileService"];
+    diffService?: DiffService | undefined;
   }): boolean {
     const saved = loadWorkbenchLayoutFromStorage();
     if (saved !== null) {
@@ -120,6 +139,13 @@ export class DockviewWorkbench {
                 files: options?.files,
                 api: options?.api,
                 fileService: options?.fileService,
+              });
+            } else if (p.type === "diff") {
+              instance = new DiffDockviewPanel({
+                id: p.id,
+                context: p.context,
+                mode: p.mode,
+                diffService: options?.diffService,
               });
             }
             this.registry.registerPanel(p, instance);
