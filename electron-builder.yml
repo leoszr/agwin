@@ -1,11 +1,7 @@
 appId: dev.pi-web.control-surface
 productName: PI WEB Control Surface
 files:
-  - dist/desktop/**
-  - dist/server/**
-  - dist/shared/**
-  - dist/sessiond/**
-  - dist/client/**
+  - dist/**
   - package.json
   - '!dist/**/*.map'
   - '!dist/**/*.test.*'
