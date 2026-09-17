@@ -1,8 +1,10 @@
-import type { PiWebPlugin, WorkspacePluginBinding } from "../types.js";
+import { render as renderTemplate, type TemplateResult } from "lit";
+import type { PiWebPlugin, WorkspacePanelContext, WorkspacePluginBinding } from "../types.js";
 import "../../../workbench/DockviewWorkbenchPanel.js";
+import type { TerminalPanelRender } from "../../../workbench/TerminalDockviewPanel.js";
 
 export function createWorkbenchPlugin(
-  getTerminalBinding?: () => WorkspacePluginBinding | undefined,
+  getTerminalPanelRender?: () => ((context: WorkspacePanelContext) => TemplateResult) | undefined,
   getDiffBinding?: () => WorkspacePluginBinding | undefined,
 ): PiWebPlugin {
   return {
@@ -23,9 +25,12 @@ export function createWorkbenchPlugin(
               </svg>
             `,
             render: (panelContext) => {
-              const terminalBinding = getTerminalBinding?.();
+              const terminalRender = getTerminalPanelRender?.();
               const diffBinding = getDiffBinding?.();
-              return context.html`<dockview-workbench-panel .context=${panelContext} .terminalBinding=${terminalBinding} .diffBinding=${diffBinding}></dockview-workbench-panel>`;
+              const terminalPanelRender: TerminalPanelRender | undefined = terminalRender === undefined
+                ? undefined
+                : (container, context) => { renderTemplate(terminalRender(context), container); };
+              return context.html`<dockview-workbench-panel .context=${panelContext} .terminalPanelRender=${terminalPanelRender} .diffBinding=${diffBinding}></dockview-workbench-panel>`;
             },
           },
         ],

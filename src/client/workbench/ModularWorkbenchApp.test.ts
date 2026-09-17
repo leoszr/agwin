@@ -7,6 +7,7 @@ import { CURRENT_PROTOCOL_VERSION } from "../../shared/protocol/contracts";
 import type { WorkspaceFilesApi } from "../src/plugins/workspaceFiles";
 import type { WorkspaceContext } from "./types";
 import type { Thread } from "../domain/thread";
+import type { WorkspacePanelContext } from "../src/plugins/types";
 
 describe("ModularWorkbenchApp Integration & Legacy Path Cut (Ticket 33)", () => {
   let container: HTMLElement;
@@ -172,16 +173,12 @@ describe("ModularWorkbenchApp Integration & Legacy Path Cut (Ticket 33)", () => 
     app.dispose();
   });
 
-  it("routes the workspace terminal service into opened terminal panels", async () => {
-    const createOrAttachTerminal = vi.fn(() => Promise.resolve({
-      terminalId: "term-routed",
-      channel: {
-        sendInput: () => Promise.resolve(),
-        resize: () => Promise.resolve(),
-        onOutput: () => () => undefined,
-        close: () => undefined,
-      },
-    }));
+  it("routes the plugin-owned terminal renderer into opened terminal panels", () => {
+    const renderTerminalPanel = vi.fn((container: HTMLElement) => {
+      container.textContent = "Terminal";
+    });
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal structural double; the renderer under test receives it opaquely.
+    const panelContext = { environmentId: "local", workspaceId: "ws-primary", cwd: "/repo/main" } as unknown as WorkspacePanelContext;
 
     const app = new ModularWorkbenchApp({
       container,
@@ -189,15 +186,16 @@ describe("ModularWorkbenchApp Integration & Legacy Path Cut (Ticket 33)", () => 
       initialWorkspace: initialWs,
       projects: [{ id: "proj-1", name: "Main Project", environmentId: "local" }],
       threads: [testThread],
-      terminalService: { createOrAttachTerminal },
+      renderTerminalPanel,
     });
 
     const termEl = document.createElement("div");
-    const termPanel = app.openTerminalPanel("term-wired");
+    const termPanel = app.openTerminalPanel({ id: "term-wired", panelContext });
     termPanel.init(termEl);
-    await termPanel.connectPty();
 
-    expect(createOrAttachTerminal).toHaveBeenCalledWith("local", "ws-primary", undefined, "proj-1");
+    expect(renderTerminalPanel).toHaveBeenCalledTimes(1);
+    expect(renderTerminalPanel).toHaveBeenCalledWith(termEl, panelContext);
+    expect(termEl.textContent).toBe("Terminal");
     app.dispose();
   });
 });

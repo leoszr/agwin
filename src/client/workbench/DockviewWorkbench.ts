@@ -6,11 +6,12 @@ import {
   type SerializedLayoutData,
 } from "./layoutStorage.js";
 import type { PanelState, WorkspaceContext } from "./types.js";
+import type { WorkspacePanelContext } from "../src/plugins/types.js";
 import { FilesDockviewPanel, type FilesPanelOptions } from "./FilesDockviewPanel.js";
 import { DiffDockviewPanel, type DiffService } from "./DiffDockviewPanel.js";
 import {
   TerminalDockviewPanel,
-  type TerminalBackendService,
+  type TerminalPanelRender,
 } from "./TerminalDockviewPanel.js";
 import { resolveAppUrl } from "../src/appUrl.js";
 
@@ -131,26 +132,26 @@ export class DockviewWorkbench {
   addTerminalPanel(options?: {
     id?: string;
     context?: WorkspaceContext;
-    terminalId?: string | undefined;
-    backendService?: TerminalBackendService | undefined;
+    panelContext?: WorkspacePanelContext | undefined;
+    renderPanel?: TerminalPanelRender | undefined;
   }): TerminalDockviewPanel {
     const panelId = options?.id ?? `term-${String(Date.now())}`;
     const panel = new TerminalDockviewPanel({
       id: panelId,
       context: options?.context ?? this.currentContext,
-      terminalId: options?.terminalId,
-      backendService: options?.backendService,
+      panelContext: options?.panelContext,
+      renderPanel: options?.renderPanel,
     });
     this.addPanel(panel.state, panel);
     return panel;
   }
-
   restoreSavedLayout(options?: {
     files?: FilesPanelOptions["files"];
     api?: FilesPanelOptions["api"];
     fileService?: FilesPanelOptions["fileService"];
     diffService?: DiffService | undefined;
-    terminalService?: TerminalBackendService | undefined;
+    terminalPanelContext?: WorkspacePanelContext | undefined;
+    renderTerminalPanel?: TerminalPanelRender | undefined;
   }): boolean {
     const saved = loadWorkbenchLayoutFromStorage();
     if (saved !== null) {
@@ -175,14 +176,11 @@ export class DockviewWorkbench {
                 diffService: options?.diffService,
               });
             } else if (p.type === "terminal") {
-              const savedTermId = p.viewState !== undefined && typeof p.viewState["terminalId"] === "string"
-                ? p.viewState["terminalId"]
-                : undefined;
               instance = new TerminalDockviewPanel({
                 id: p.id,
                 context: p.context,
-                terminalId: savedTermId,
-                backendService: options?.terminalService,
+                panelContext: options?.terminalPanelContext,
+                renderPanel: options?.renderTerminalPanel,
               });
             }
             this.registry.registerPanel(p, instance);

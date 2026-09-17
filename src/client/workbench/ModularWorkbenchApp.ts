@@ -3,12 +3,13 @@ import { serializeWorkbenchLayout } from "./layoutStorage";
 import { AccessibleWorkbenchController } from "./accessibleActions";
 import { FilesDockviewPanel, type FilesPanelOptions } from "./FilesDockviewPanel";
 import { DiffDockviewPanel, type DiffService } from "./DiffDockviewPanel";
-import { TerminalDockviewPanel, type TerminalBackendService } from "./TerminalDockviewPanel";
+import { TerminalDockviewPanel, type TerminalPanelRender } from "./TerminalDockviewPanel";
 import { ModularChatPanel } from "./ModularChatPanel";
 import { ProjectExplorer, type ProjectExplorerProject } from "../explorer/ProjectExplorer";
 import { createThread as createDomainThread, type Thread } from "../domain/thread";
 import type { DockviewWorkbench } from "./DockviewWorkbench";
 import type { WorkspaceContext } from "./types";
+import type { WorkspacePanelContext } from "../src/plugins/types";
 import type { ClientRuntime } from "../runtime/ClientRuntime";
 import type { AgentRuntime } from "../../server/agent/types";
 import type { ModularChatPanelOptions } from "./ModularChatPanel";
@@ -28,7 +29,7 @@ export interface ModularWorkbenchAppOptions {
   api?: FilesPanelOptions["api"];
   fileService?: FilesPanelOptions["fileService"] | undefined;
   diffService?: DiffService | undefined;
-  terminalService?: TerminalBackendService | undefined;
+  renderTerminalPanel?: TerminalPanelRender | undefined;
   initialWorkspace: WorkspaceContext;
   projects: ProjectExplorerProject[];
   threads: Thread[];
@@ -202,8 +203,8 @@ export class ModularWorkbenchApp {
     options?: {
       id?: string;
       context?: WorkspaceContext;
-      terminalId?: string;
-      backendService?: TerminalBackendService;
+      panelContext?: WorkspacePanelContext | undefined;
+      renderPanel?: TerminalPanelRender | undefined;
     } | string,
   ): TerminalDockviewPanel {
     const opts = typeof options === "string" ? { id: options } : options;
@@ -211,8 +212,8 @@ export class ModularWorkbenchApp {
     const panel = new TerminalDockviewPanel({
       id: panelId,
       context: opts?.context ?? this.activeWorkspace,
-      terminalId: opts?.terminalId,
-      backendService: opts?.backendService ?? this.options.terminalService,
+      panelContext: opts?.panelContext,
+      renderPanel: opts?.renderPanel ?? this.options.renderTerminalPanel,
     });
     this.registry.registerPanel(panel.state, panel);
     return panel;

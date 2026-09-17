@@ -92,7 +92,7 @@ describe("PiWebApp plugin host", () => {
     expect(bench?.title).toBe("Bancada");
   });
 
-  it("forwards terminal and diff bindings to the bench element", () => {
+  it("forwards the terminal plugin render and diff bindings to the bench element", () => {
     installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&view=chat");
     const app = new PiWebApp();
     installTestTerminalComposition(app, "local");
@@ -106,11 +106,16 @@ describe("PiWebApp plugin host", () => {
     const panel = appPluginRegistry(app).getWorkspacePanels().find(({ id }) => id === WORKBENCH_PANEL_ID);
     if (panel === undefined) throw new Error("Workbench panel contribution was unavailable");
     const container = document.createElement("div");
-    renderTemplate(panel.render(workspacePanelContextFromApp(app)), container);
+    const panelContext = workspacePanelContextFromApp(app);
+    renderTemplate(panel.render(panelContext), container);
     const element = container.querySelector("dockview-workbench-panel");
     if (!(element instanceof DockviewWorkbenchPanel)) throw new Error("Bench element was not rendered");
-    expect(element.terminalBinding).toMatchObject({ sourcePluginId: "pi-web.terminal" });
     expect(element.diffBinding).toMatchObject({ sourcePluginId: "git", backendRevision: "local-git-r1" });
+    const renderTerminalPanel = element.terminalPanelRender;
+    if (typeof renderTerminalPanel !== "function") throw new Error("Bench element missed the terminal plugin render");
+    const termContainer = document.createElement("div");
+    renderTerminalPanel(termContainer, panelContext);
+    expect(termContainer.textContent).toContain("Terminal");
   });
 
   it("commits a main-view destination before applying the rendered selection", () => {

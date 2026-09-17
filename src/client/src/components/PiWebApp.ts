@@ -311,7 +311,7 @@ export class PiWebApp extends LitElement {
   private readonly plugins = createPluginRegistry(
     (pluginId, machineId) => this.pluginContributionAvailable(pluginId, machineId),
     createWorkbenchPlugin(
-      () => this.requiredTerminalByMachine.get(selectedMachineId(this.state))?.binding,
+      () => this.terminalWorkspacePanelRender(selectedMachineId(this.state)),
       () => this.gitDiffBindingByMachine.get(selectedMachineId(this.state)),
     ),
   );
@@ -1427,6 +1427,16 @@ export class PiWebApp extends LitElement {
 
   private requiredTerminalPanelId(machineId: string): QualifiedContributionId {
     return `${this.requiredTerminalComposition(machineId).binding.registrationPluginId}:${TERMINAL_PANEL_LOCAL_ID}`;
+  }
+
+  private terminalWorkspacePanelRender(machineId: string): ((context: WorkspacePanelContext) => TemplateResult) | undefined {
+    let panelId: QualifiedContributionId;
+    try {
+      panelId = this.requiredTerminalPanelId(machineId);
+    } catch {
+      return undefined;
+    }
+    return this.plugins.getWorkspacePanels().find((panel) => panel.id === panelId)?.render;
   }
 
   private selectMainView(view: AppState["mainView"], options: { invalidateNavigationSelection?: boolean | undefined } = {}) {

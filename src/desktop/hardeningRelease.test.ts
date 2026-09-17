@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DESKTOP_CSP_DIRECTIVES, getMainWindowOptions, getPopoutWindowOptions } from "./windowConfig";
 import { DesktopHostSupervisor } from "./supervisor";
-import { MAX_TERMINAL_INPUT_CHUNK_BYTES } from "../client/workbench/TerminalDockviewPanel";
+import { TERMINAL_CHANNEL_DATA_JSON_MAX_BYTES } from "../../pi-web-plugins/terminal/terminalProtocol";
 
 describe("Hardening & Release Gate Validations (Ticket 34)", () => {
   it("validates that all production dependencies have approved permissive licenses in docs/distribution-licenses.md", () => {
@@ -30,7 +30,7 @@ describe("Hardening & Release Gate Validations (Ticket 34)", () => {
   });
 
   it("enforces backpressure limits and input chunk boundaries on data channels", () => {
-    expect(MAX_TERMINAL_INPUT_CHUNK_BYTES).toBe(16384);
+    expect(TERMINAL_CHANNEL_DATA_JSON_MAX_BYTES).toBe(65536);
   });
 
   it("enforces renderer security restrictions, CSP headers, and preload isolation", () => {

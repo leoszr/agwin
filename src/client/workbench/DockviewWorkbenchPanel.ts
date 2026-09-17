@@ -1,15 +1,14 @@
 import { css, html, LitElement } from "lit";
 import { property, query } from "lit/decorators.js";
 import { DockviewWorkbench } from "./DockviewWorkbench.js";
-import { createTerminalBackendServiceFromPairedBackend, type TerminalBackendService } from "./TerminalDockviewPanel.js";
+import type { TerminalPanelRender } from "./TerminalDockviewPanel.js";
 import { createGitDiffService, type DiffService } from "./DiffDockviewPanel.js";
-import { createPairedPluginWorkspaceBackend } from "../src/plugins/workspaceBackend.js";
 import type { WorkspaceContext } from "./types.js";
 import type { WorkspacePanelContext, WorkspacePluginBinding } from "../src/plugins/types.js";
 
 export class DockviewWorkbenchPanel extends LitElement {
   @property({ attribute: false }) context: WorkspacePanelContext | undefined;
-  @property({ attribute: false }) terminalBinding: WorkspacePluginBinding | undefined;
+  @property({ attribute: false }) terminalPanelRender: TerminalPanelRender | undefined;
   @property({ attribute: false }) diffBinding: WorkspacePluginBinding | undefined;
   @query(".workbench-host") private workbenchHost?: HTMLElement;
 
@@ -92,20 +91,9 @@ export class DockviewWorkbenchPanel extends LitElement {
     });
     this.workbench = workbench;
 
-    // Resolve terminal service from authoritative pairedBackend or explicit binding
-    let terminalService: TerminalBackendService | undefined;
-    if (this.context?.pairedBackend && typeof this.context.pairedBackend.openChannel === "function") {
-      terminalService = createTerminalBackendServiceFromPairedBackend(this.context.pairedBackend);
-    } else if (this.terminalBinding && this.context) {
-      const pairedBackend = createPairedPluginWorkspaceBackend(
-        this.terminalBinding,
-        this.context.workspace,
-        this.context.machine.id,
-      );
-      if (pairedBackend) {
-        terminalService = createTerminalBackendServiceFromPairedBackend(pairedBackend);
-      }
-    }
+    // Terminal rendering is owned by the terminal plugin; core only hosts it.
+    const renderTerminalPanel = this.terminalPanelRender;
+    const terminalPanelContext = renderTerminalPanel !== undefined ? this.context : undefined;
 
     // Resolve diff service from explicit binding if present
     let diffService: DiffService | undefined;
@@ -139,7 +127,8 @@ export class DockviewWorkbenchPanel extends LitElement {
     workbench.addTerminalPanel({
       id: "workbench-term-main",
       context: wsContext,
-      backendService: terminalService,
+      panelContext: terminalPanelContext,
+      renderPanel: renderTerminalPanel,
     });
 
     workbench.addFilesPanel({
