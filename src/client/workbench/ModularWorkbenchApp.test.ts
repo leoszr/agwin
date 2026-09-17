@@ -171,4 +171,33 @@ describe("ModularWorkbenchApp Integration & Legacy Path Cut (Ticket 33)", () => 
     expect(getChangedFiles).toHaveBeenCalledWith("local", "ws-primary", "proj-1");
     app.dispose();
   });
+
+  it("routes the workspace terminal service into opened terminal panels", async () => {
+    const createOrAttachTerminal = vi.fn(() => Promise.resolve({
+      terminalId: "term-routed",
+      channel: {
+        sendInput: () => Promise.resolve(),
+        resize: () => Promise.resolve(),
+        onOutput: () => () => undefined,
+        close: () => undefined,
+      },
+    }));
+
+    const app = new ModularWorkbenchApp({
+      container,
+      runtime: clientRuntime,
+      initialWorkspace: initialWs,
+      projects: [{ id: "proj-1", name: "Main Project", environmentId: "local" }],
+      threads: [testThread],
+      terminalService: { createOrAttachTerminal },
+    });
+
+    const termEl = document.createElement("div");
+    const termPanel = app.openTerminalPanel("term-wired");
+    termPanel.init(termEl);
+    await termPanel.connectPty();
+
+    expect(createOrAttachTerminal).toHaveBeenCalledWith("local", "ws-primary", undefined, "proj-1");
+    app.dispose();
+  });
 });

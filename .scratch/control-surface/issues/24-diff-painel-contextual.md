@@ -21,3 +21,11 @@
 Verificação em 2026-09-14: `vitest run src/client/workbench` — 8 arquivos, 44 testes passaram, cobrindo seguidor/fixado/auto-pin com aviso visível, integração e restauração no DockviewWorkbench e o mapeamento status/diff do backend Git; `npm run typecheck` e `eslint` dos arquivos alterados passaram. Sem changeset: o painel ainda não está montado no cliente publicado (mesma convenção da entrega de Files).
 
 O smoke de Web/AppImage permanece pendente de ambiente operacional; nota de risco: o host do AppImage herda `~/.pi-web` como data dir e disputa o `sessiond` systemd ativo (`pi-web-sessiond.service`), então a validação empacotada fica como decisão do operador.
+
+### 2026-09-16 — Smoke Web parcial (Bancada montada em 25)
+
+Painel Diff abre em modo seguidor no browser (`Diff (/home/leo/Projects) (following)`, `No diff selected`, sem crash). Caminho real exercitado pelo proxy: `POST /api/plugin-backends/git/.../status` responde estruturado (409 `owner-mismatch` no projeto sem repo; handshake de revisão OK). Diff com conteúdo real pendente de workspace com repo git registrado. AppImage: repackado com a Bancada (ver 25); GUI empacotada pendente de display.
+
+### 2026-09-17 — Smoke AppImage diferido (decisão: leo)
+
+Foco total no webapp até conclusão; smoke do AppImage permanece pendente sem bloquear as próximas issues.

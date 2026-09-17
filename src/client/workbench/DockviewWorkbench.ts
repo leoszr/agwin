@@ -8,11 +8,17 @@ import {
 import type { PanelState, WorkspaceContext } from "./types.js";
 import { FilesDockviewPanel, type FilesPanelOptions } from "./FilesDockviewPanel.js";
 import { DiffDockviewPanel, type DiffService } from "./DiffDockviewPanel.js";
+import {
+  TerminalDockviewPanel,
+  type TerminalBackendService,
+} from "./TerminalDockviewPanel.js";
+import { resolveAppUrl } from "../src/appUrl.js";
 
 export interface DockviewWorkbenchOptions {
   container: HTMLElement;
   initialContext: WorkspaceContext;
   onActivePanelChange?: (panelId: string) => void;
+  popoutUrl?: string | undefined;
 }
 
 export class DockviewWorkbench {
@@ -25,7 +31,10 @@ export class DockviewWorkbench {
     this.registry = new WorkbenchPanelRegistry();
     this.registry.setActiveWorkspace(this.currentContext);
 
+    const popoutUrl = options.popoutUrl ?? (typeof window !== "undefined" && typeof document !== "undefined" && window.location.href.startsWith("http") ? resolveAppUrl("popout.html") : "/popout.html");
+
     this.api = createDockview(options.container, {
+      popoutUrl,
       createComponent: (options) => {
         return this.createRenderer(options.name);
       },
@@ -119,11 +128,29 @@ export class DockviewWorkbench {
     return panel;
   }
 
+  addTerminalPanel(options?: {
+    id?: string;
+    context?: WorkspaceContext;
+    terminalId?: string | undefined;
+    backendService?: TerminalBackendService | undefined;
+  }): TerminalDockviewPanel {
+    const panelId = options?.id ?? `term-${String(Date.now())}`;
+    const panel = new TerminalDockviewPanel({
+      id: panelId,
+      context: options?.context ?? this.currentContext,
+      terminalId: options?.terminalId,
+      backendService: options?.backendService,
+    });
+    this.addPanel(panel.state, panel);
+    return panel;
+  }
+
   restoreSavedLayout(options?: {
     files?: FilesPanelOptions["files"];
     api?: FilesPanelOptions["api"];
     fileService?: FilesPanelOptions["fileService"];
     diffService?: DiffService | undefined;
+    terminalService?: TerminalBackendService | undefined;
   }): boolean {
     const saved = loadWorkbenchLayoutFromStorage();
     if (saved !== null) {
@@ -146,6 +173,16 @@ export class DockviewWorkbench {
                 context: p.context,
                 mode: p.mode,
                 diffService: options?.diffService,
+              });
+            } else if (p.type === "terminal") {
+              const savedTermId = p.viewState !== undefined && typeof p.viewState["terminalId"] === "string"
+                ? p.viewState["terminalId"]
+                : undefined;
+              instance = new TerminalDockviewPanel({
+                id: p.id,
+                context: p.context,
+                terminalId: savedTermId,
+                backendService: options?.terminalService,
               });
             }
             this.registry.registerPanel(p, instance);
@@ -184,6 +221,7 @@ export class DockviewWorkbench {
         title: p.title,
         mode: p.mode,
         context: { ...p.context },
+        ...(p.viewState !== undefined ? { viewState: { ...p.viewState } } : {}),
       })),
     };
     saveWorkbenchLayoutToStorage(layoutData);
@@ -209,7 +247,79 @@ export class DockviewWorkbench {
     }
   }
 
+  movePanelToGroup(panelId: string, targetPanelId: string): boolean {
+    const panel = this.api.getPanel(panelId);
+    const target = this.api.getPanel(targetPanelId);
+    if (!panel || !target) return false;
+    panel.api.moveTo({ group: target.group });
+    return true;
+  }
+
+  floatPanel(panelId: string, options?: { x?: number; y?: number; width?: number; height?: number }): boolean {
+    const panel = this.api.getPanel(panelId);
+    if (!panel) return false;
+    this.api.addFloatingGroup(panel, options);
+    this.registry.getPanelInstance(panelId)?.setFloating?.(true);
+    return true;
+  }
+
+  async popoutPanel(panelId: string): Promise<boolean> {
+    const panel = this.api.getPanel(panelId);
+    if (!panel) return false;
+    let success: boolean;
+    try {
+      success = await this.api.addPopoutGroup(panel);
+    } catch {
+      return false;
+    }
+    if (success) {
+      const popouts = this.api.getPopouts();
+      const popout = popouts[popouts.length - 1];
+      const targetDoc = popout?.window.document;
+      this.registry.getPanelInstance(panelId)?.setPopout?.(true, targetDoc);
+    }
+    return success;
+  }
+
+  hidePanel(panelId: string): boolean {
+    const panel = this.api.getPanel(panelId);
+    if (!panel) return false;
+    const group = panel.group;
+    const other = group.panels.find((p) => p.id !== panelId);
+    if (other) {
+      other.api.setActive();
+    }
+    const instance = this.registry.getPanelInstance(panelId);
+    if (instance && "element" in instance && instance.element instanceof HTMLElement) {
+      instance.element.style.display = "none";
+    }
+    return true;
+  }
+
+  showPanel(panelId: string): boolean {
+    const panel = this.api.getPanel(panelId);
+    if (!panel) return false;
+    panel.api.setActive();
+    const instance = this.registry.getPanelInstance(panelId);
+    if (instance && "element" in instance && instance.element instanceof HTMLElement) {
+      instance.element.style.display = "";
+    }
+    return true;
+  }
+
+  closePanel(panelId: string): boolean {
+    const panel = this.api.getPanel(panelId);
+    if (!panel) return false;
+    panel.api.close();
+    this.registry.removePanel(panelId);
+    return true;
+  }
+
   dispose(): void {
+    const popouts = this.api.getPopouts();
+    for (const p of popouts) {
+      p.window.close();
+    }
     this.api.dispose();
   }
 }

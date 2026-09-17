@@ -32,10 +32,11 @@ import { initialSessionWarningVisibilityState, reconcileSessionWarningVisibility
 import { RealtimeSocket, type BrowserRealtimeEvent } from "../sessionSocket";
 import { ServerNoticesController, visibleServerNotices } from "../serverNotices";
 import type { ServerNotice } from "../../../shared/apiTypes";
-import type { ContributionQueryValue, PiWebPluginRegistration, PluginMachine, PluginPromptEditor, QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspacePanelContribution, PluginRuntimeContext, WorkspaceFilesCapabilityV1, WorkspaceHost, WorkspaceInvalidation, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelNavigationV1, WorkspacePanelTerminal, WorkspacePluginBinding, WorkspaceTerminalCommandInput } from "../plugins/types";
+import type { ContributionQueryValue, PiWebPlugin, PiWebPluginRegistration, PluginMachine, PluginPromptEditor, QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspacePanelContribution, PluginRuntimeContext, WorkspaceFilesCapabilityV1, WorkspaceHost, WorkspaceInvalidation, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelNavigationV1, WorkspacePanelTerminal, WorkspacePluginBinding, WorkspaceTerminalCommandInput } from "../plugins/types";
 import { CLASSIC_THEME_ID, DEFAULT_THEME_PREFERENCE, applyPiWebTheme, findThemePairForTheme, readStoredThemePreference, resolveThemePreference, writeStoredThemePreference, type ThemePreference, type ThemePreferenceResolution } from "../theme";
 import { corePlugin } from "../plugins/core";
 import { themePackPlugin } from "../plugins/themes";
+import { createWorkbenchPlugin } from "../plugins/workbench";
 import { loadExternalPlugins, type ExternalPluginLoadResult } from "../plugins/external";
 import { REQUIRED_TERMINAL_PLUGIN_ID, type TerminalPluginMode } from "../../../shared/requiredTerminalPlugin";
 import { PluginRegistry, installPluginRuntimeScope, installWorkspaceLabelScope, installWorkspacePanelScope } from "../plugins/registry";
@@ -282,6 +283,7 @@ export class PiWebApp extends LitElement {
   private readonly handledWorkspaceDeletionRunIds = new Set<string>();
   private readonly requiredTerminalByMachine = new Map<string, RequiredTerminalBrowserComposition>();
   private readonly knownRequiredTerminalByMachine = new Map<string, RequiredTerminalBrowserComposition>();
+  private readonly gitDiffBindingByMachine = new Map<string, WorkspacePluginBinding>();
   private readonly verifiedPluginModeByMachine = new Map<string, TerminalPluginMode>();
   /** Required-load failures outlive workspace/project resets until authoritative recovery. */
   private readonly requiredPluginFailureByMachine = new Map<string, string>();
@@ -306,8 +308,13 @@ export class PiWebApp extends LitElement {
   private remoteRouteRestoreTimer: number | undefined;
   private remoteRouteRestoreAttempt = 0;
   private remoteRouteRestoreInProgress = false;
-  private readonly plugins = createPluginRegistry((pluginId, machineId) =>
-    this.pluginContributionAvailable(pluginId, machineId));
+  private readonly plugins = createPluginRegistry(
+    (pluginId, machineId) => this.pluginContributionAvailable(pluginId, machineId),
+    createWorkbenchPlugin(
+      () => this.requiredTerminalByMachine.get(selectedMachineId(this.state))?.binding,
+      () => this.gitDiffBindingByMachine.get(selectedMachineId(this.state)),
+    ),
+  );
   private readonly loadedMachinePluginIds = new Set<string>();
   private readonly machinePluginLoadPromises = new Map<string, Promise<void>>();
   private gatewayPluginLoadPromise: Promise<void> | undefined;
@@ -2344,9 +2351,12 @@ export class PiWebApp extends LitElement {
             this.knownRequiredTerminalByMachine.set(machineId, composition);
             this.requiredTerminalByMachine.set(machineId, composition);
           }
+          const gitDiffBinding = gitDiffPluginBinding(registration);
+          if (gitDiffBinding !== undefined) this.gitDiffBindingByMachine.set(machineId, gitDiffBinding);
         } catch (error) {
           complete = false;
           console.warn(`Failed to register PI WEB plugin ${registration.id}`, error);
+          if (gitDiffPluginBinding(registration) !== undefined) this.gitDiffBindingByMachine.delete(machineId);
           if (isRequiredTerminal) {
             this.verifiedPluginModeByMachine.delete(machineId);
             this.clearRequiredTerminal(machineId);
@@ -2422,9 +2432,9 @@ export class PiWebApp extends LitElement {
     this.dismissedRequiredPluginFailureByMachine.set(machineId, failure);
     this.requestUpdate();
   }
-
   private clearRequiredTerminal(machineId: string): void {
     this.requiredTerminalByMachine.delete(machineId);
+    this.gitDiffBindingByMachine.delete(machineId);
     this.loadedMachinePluginIds.delete(machineId);
     if (selectedMachineId(this.state) !== machineId) return;
     this.cancelWorkspaceDeletionRefresh();
@@ -3268,10 +3278,14 @@ function modelValueFromStatus(status: AppState["status"]): string | undefined {
   return provider !== undefined && id !== undefined ? `${provider}/${id}` : undefined;
 }
 
-function createPluginRegistry(isContributionEnabled: (pluginId: string, machineId: string | undefined) => boolean): PluginRegistry {
+function createPluginRegistry(
+  isContributionEnabled: (pluginId: string, machineId: string | undefined) => boolean,
+  workbench: PiWebPlugin,
+): PluginRegistry {
   const registry = new PluginRegistry({ isContributionEnabled });
   registry.register({ id: "core", plugin: corePlugin });
   registry.register({ id: "themes", plugin: themePackPlugin });
+  registry.register({ id: "workbench", plugin: workbench });
   return registry;
 }
 
@@ -3453,6 +3467,20 @@ function requiredTerminalPluginBinding(registration: PiWebPluginRegistration): W
     backendRevision: registration.backendRevision,
     pairedRequestVersion: 1,
     pairedChannelVersion: 1,
+  });
+}
+
+const GIT_DIFF_PLUGIN_ID = "git";
+
+/** Binding for the Diff panel; undefined for any registration that is not the Git backend. Never throws. */
+function gitDiffPluginBinding(registration: PiWebPluginRegistration): WorkspacePluginBinding | undefined {
+  if ((registration.sourcePluginId ?? registration.id) !== GIT_DIFF_PLUGIN_ID) return undefined;
+  const backendRevision = registration.backendRevision;
+  if (backendRevision === undefined || backendRevision === "") return undefined;
+  return Object.freeze({
+    registrationPluginId: registration.id,
+    sourcePluginId: GIT_DIFF_PLUGIN_ID,
+    backendRevision,
   });
 }
 

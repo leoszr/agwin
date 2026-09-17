@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { render as renderTemplate } from "lit";
+import { DockviewWorkbenchPanel } from "../../workbench/DockviewWorkbenchPanel.js";
 import { FilesRuntime } from "../../../../pi-web-plugins/files/FilesRuntime";
 import { TerminalBrowserRuntime } from "../../../../pi-web-plugins/terminal/TerminalBrowserRuntime";
 import { TerminalFacade, type RequiredTerminalBrowserFacadeV1, type RequiredTerminalWorkspaceBindingV1 } from "../../../../pi-web-plugins/terminal/TerminalFacade";
@@ -29,6 +31,7 @@ vi.mock("../plugins/external", () => ({ loadExternalPlugins: vi.fn() }));
 const project: Project = { id: "project-1", name: "Project", path: "/repo", createdAt: "now" };
 const remoteMachine: Machine = { id: "remote-1", name: "Remote", kind: "remote", createdAt: "now", updatedAt: "now" };
 const TERMINAL_PANEL_ID = "pi-web.terminal:workspace.terminal";
+const WORKBENCH_PANEL_ID = "workbench:workspace.workbench";
 
 const workspace: Workspace = {
   id: "workspace-1",
@@ -80,6 +83,34 @@ describe("PiWebApp plugin host", () => {
     expect(mainViewAtCommit).toBe("chat");
     expect(new URL(window.location.href).searchParams.get("view")).toBe(TERMINAL_PANEL_ID);
     expect(appState(app).mainView).toBe(TERMINAL_PANEL_ID);
+  });
+
+  it("registers the built-in workbench bench panel", () => {
+    installBrowserWindow("http://localhost/app");
+    const app = new PiWebApp();
+    const bench = appPluginRegistry(app).getWorkspacePanels().find((panel) => panel.id === "workbench:workspace.workbench");
+    expect(bench?.title).toBe("Bancada");
+  });
+
+  it("forwards terminal and diff bindings to the bench element", () => {
+    installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&view=chat");
+    const app = new PiWebApp();
+    installTestTerminalComposition(app, "local");
+    installTestGitDiffBinding(app, "local");
+    setAppState(app, {
+      ...initialAppState(),
+      selectedProject: project,
+      selectedWorkspace: workspace,
+      workspaces: [workspace],
+    });
+    const panel = appPluginRegistry(app).getWorkspacePanels().find(({ id }) => id === WORKBENCH_PANEL_ID);
+    if (panel === undefined) throw new Error("Workbench panel contribution was unavailable");
+    const container = document.createElement("div");
+    renderTemplate(panel.render(workspacePanelContextFromApp(app)), container);
+    const element = container.querySelector("dockview-workbench-panel");
+    if (!(element instanceof DockviewWorkbenchPanel)) throw new Error("Bench element was not rendered");
+    expect(element.terminalBinding).toMatchObject({ sourcePluginId: "pi-web.terminal" });
+    expect(element.diffBinding).toMatchObject({ sourcePluginId: "git", backendRevision: "local-git-r1" });
   });
 
   it("commits a main-view destination before applying the rendered selection", () => {
@@ -1868,8 +1899,8 @@ describe("PiWebApp plugin host", () => {
     expect(appState(app)).toMatchObject({
       selectedMachine: { id: machineB.id },
       selectedWorkspace: { id: workspaceB.id },
-      workspaceTool: `${machineScopedBundledPluginId(machineB.id, "pi-web.terminal")}:workspace.terminal`,
-      mainView: `${machineScopedBundledPluginId(machineB.id, "pi-web.terminal")}:workspace.terminal`,
+      workspaceTool: WORKBENCH_PANEL_ID,
+      mainView: WORKBENCH_PANEL_ID,
     });
     expect(window.history.length).toBe(historyLength + 1);
     expect(browser.pushed).toHaveLength(1);
@@ -2064,13 +2095,12 @@ describe("PiWebApp plugin host", () => {
     });
 
     expect(appState(app)).toMatchObject({
-      workspaceTool: TERMINAL_PANEL_ID,
-      mainView: TERMINAL_PANEL_ID,
+      workspaceTool: WORKBENCH_PANEL_ID,
+      mainView: WORKBENCH_PANEL_ID,
     });
-    expect(browser.url.searchParams.get("tool")).toBe(TERMINAL_PANEL_ID);
-    expect(browser.url.searchParams.get("view")).toBe(TERMINAL_PANEL_ID);
-    expect(mobileTabIds(app)).toEqual(["navigation", "chat", TERMINAL_PANEL_ID]);
-
+    expect(browser.url.searchParams.get("tool")).toBe(WORKBENCH_PANEL_ID);
+    expect(browser.url.searchParams.get("view")).toBe(WORKBENCH_PANEL_ID);
+    expect(mobileTabIds(app)).toEqual(["navigation", "chat", WORKBENCH_PANEL_ID, TERMINAL_PANEL_ID]);
     setAppState(app, {
       ...appState(app),
       workspaceTool: "missing:workspace.panel",
@@ -2078,7 +2108,7 @@ describe("PiWebApp plugin host", () => {
     });
     callAppMethod(app, "reconcileWorkspacePanelSelection");
 
-    expect(appState(app).workspaceTool).toBe(TERMINAL_PANEL_ID);
+    expect(appState(app).workspaceTool).toBe(WORKBENCH_PANEL_ID);
     expect(appState(app).mainView).toBe("chat");
   });
 
@@ -2133,8 +2163,8 @@ describe("PiWebApp plugin host", () => {
     await vi.waitFor(() => { expect(browser.url.searchParams.get("step")).toBe("unavailable"); });
     callAppMethod(app, "onPopState");
     await vi.waitFor(() => {
-      expect(browser.url.searchParams.get("tool")).toBe(TERMINAL_PANEL_ID);
-      expect(browser.url.searchParams.get("view")).toBe(TERMINAL_PANEL_ID);
+      expect(browser.url.searchParams.get("tool")).toBe(WORKBENCH_PANEL_ID);
+      expect(browser.url.searchParams.get("view")).toBe(WORKBENCH_PANEL_ID);
     });
 
     expect(browser.replaced).toHaveLength(1);
@@ -2173,12 +2203,12 @@ describe("PiWebApp plugin host", () => {
     await ensureGatewayPluginsLoaded(app);
 
     expect(appState(app)).toMatchObject({
-      workspaceTool: TERMINAL_PANEL_ID,
-      mainView: TERMINAL_PANEL_ID,
+      workspaceTool: WORKBENCH_PANEL_ID,
+      mainView: WORKBENCH_PANEL_ID,
     });
-    expect(browser.url.searchParams.get("tool")).toBe(TERMINAL_PANEL_ID);
-    expect(browser.url.searchParams.get("view")).toBe(TERMINAL_PANEL_ID);
-    expect(mobileTabIds(app)).toEqual(["navigation", "chat", TERMINAL_PANEL_ID]);
+    expect(browser.url.searchParams.get("tool")).toBe(WORKBENCH_PANEL_ID);
+    expect(browser.url.searchParams.get("view")).toBe(WORKBENCH_PANEL_ID);
+    expect(mobileTabIds(app)).toEqual(["navigation", "chat", WORKBENCH_PANEL_ID, TERMINAL_PANEL_ID]);
     expect(workspacePanelContextFromApp(app).files.capabilityVersion).toBe(1);
     expect(warning).toHaveBeenCalledWith(
       "Failed to load PI WEB plugin files (./files/plugin.js)",
@@ -2878,7 +2908,7 @@ describe("PiWebApp plugin host", () => {
 
     await ensureGatewayPluginsLoaded(app);
 
-    expect(mobileTabIds(app)).toEqual(["navigation", "chat"]);
+    expect(mobileTabIds(app)).toEqual(["navigation", "chat", WORKBENCH_PANEL_ID]);
     const context = workspacePanelContextFromApp(app);
     await expect(context.terminal.runCommand({ title: "Unavailable", command: "true" }))
       .rejects.toThrow("Required Terminal plugin is unavailable");
@@ -3268,6 +3298,16 @@ function markPluginLoadingReady(app: PiWebApp, loadedMachineIds: readonly string
     loaded.add(machineId);
     installTestTerminalComposition(app, machineId);
   }
+}
+
+function installTestGitDiffBinding(app: PiWebApp, machineId: string): void {
+  const bindings: unknown = Reflect.get(app, "gitDiffBindingByMachine");
+  if (!(bindings instanceof Map)) throw new Error("PiWebApp git diff binding map was unavailable");
+  bindings.set(machineId, {
+    registrationPluginId: "git",
+    sourcePluginId: "git",
+    backendRevision: `${machineId}-git-r1`,
+  });
 }
 
 function installTestTerminalComposition(app: PiWebApp, machineId: string): void {

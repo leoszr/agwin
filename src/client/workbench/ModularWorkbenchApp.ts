@@ -3,7 +3,7 @@ import { serializeWorkbenchLayout } from "./layoutStorage";
 import { AccessibleWorkbenchController } from "./accessibleActions";
 import { FilesDockviewPanel, type FilesPanelOptions } from "./FilesDockviewPanel";
 import { DiffDockviewPanel, type DiffService } from "./DiffDockviewPanel";
-import { TerminalDockviewPanel } from "./TerminalDockviewPanel";
+import { TerminalDockviewPanel, type TerminalBackendService } from "./TerminalDockviewPanel";
 import { ModularChatPanel } from "./ModularChatPanel";
 import { ProjectExplorer, type ProjectExplorerProject } from "../explorer/ProjectExplorer";
 import { createThread as createDomainThread, type Thread } from "../domain/thread";
@@ -28,6 +28,7 @@ export interface ModularWorkbenchAppOptions {
   api?: FilesPanelOptions["api"];
   fileService?: FilesPanelOptions["fileService"] | undefined;
   diffService?: DiffService | undefined;
+  terminalService?: TerminalBackendService | undefined;
   initialWorkspace: WorkspaceContext;
   projects: ProjectExplorerProject[];
   threads: Thread[];
@@ -197,11 +198,21 @@ export class ModularWorkbenchApp {
     return panel;
   }
 
-  openTerminalPanel(id?: string): TerminalDockviewPanel {
-    const panelId = id ?? `term-${String(Date.now())}`;
+  openTerminalPanel(
+    options?: {
+      id?: string;
+      context?: WorkspaceContext;
+      terminalId?: string;
+      backendService?: TerminalBackendService;
+    } | string,
+  ): TerminalDockviewPanel {
+    const opts = typeof options === "string" ? { id: options } : options;
+    const panelId = opts?.id ?? `term-${String(Date.now())}`;
     const panel = new TerminalDockviewPanel({
       id: panelId,
-      context: this.activeWorkspace,
+      context: opts?.context ?? this.activeWorkspace,
+      terminalId: opts?.terminalId,
+      backendService: opts?.backendService ?? this.options.terminalService,
     });
     this.registry.registerPanel(panel.state, panel);
     return panel;

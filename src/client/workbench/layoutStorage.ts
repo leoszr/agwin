@@ -6,6 +6,7 @@ export interface SerializedPanelConfig {
   title: string;
   mode: "following" | "pinned";
   context: WorkspaceContext;
+  viewState?: Record<string, unknown> | undefined;
 }
 
 export interface SerializedLayoutData {
@@ -38,6 +39,7 @@ export function serializeWorkbenchLayout(
     title: p.title,
     mode: p.mode,
     context: { ...p.context },
+    ...(p.viewState !== undefined ? { viewState: { ...p.viewState } } : {}),
   }));
 
   const data: SerializedLayoutData = {
@@ -78,6 +80,8 @@ export function parseWorkbenchLayout(rawJson: string): SerializedLayoutData | nu
         return null;
       }
 
+      const rawVs = item["viewState"];
+      const viewState = isRecord(rawVs) ? rawVs : undefined;
       panels.push({
         id: item["id"],
         type: panelType,
@@ -88,9 +92,9 @@ export function parseWorkbenchLayout(rawJson: string): SerializedLayoutData | nu
           workspaceId: ctx["workspaceId"],
           cwd: typeof ctx["cwd"] === "string" ? ctx["cwd"] : "",
         },
+        ...(viewState !== undefined ? { viewState } : {}),
       });
     }
-
     return {
       version: 1,
       gridGeometry: parsed["gridGeometry"],

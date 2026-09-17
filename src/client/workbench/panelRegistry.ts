@@ -12,6 +12,8 @@ export interface IWorkbenchPanelInstance {
   init?(container: HTMLElement, doc?: Document): void;
   focus?(): void;
   dispose?(): void;
+  setFloating?(floating: boolean): void;
+  setPopout?(popout: boolean, targetDoc?: Document): void;
 }
 
 export class WorkbenchPanelRegistry {
