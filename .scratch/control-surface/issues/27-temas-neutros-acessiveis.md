@@ -4,7 +4,7 @@
 
 **Blocked by:** 24/Usar Diff como Painel contextual; 25/Usar Terminal como Painel fixo ao Workspace
 
-**Status:** ready-for-human
+**Status:** resolved
 
 - [x] Superfícies, ações, foco e estados estruturais usam somente a paleta neutra aprovada.
 - [x] ANSI, realce de sintaxe e marcadores de diff preservam suas cores semânticas isoladas.
@@ -53,3 +53,10 @@ Residuais conhecidos: links do shell legado perdem distinção por matiz sob acc
 neutro (sublinhado como affordance é trabalho futuro); hairlines decorativas ficam
 abaixo de 3:1 por desenho — significado nunca depende só delas; revisão manual de
 todas as superfícies (exigida pelo contrato) continua pendente.
+
+### 2026-09-19 — Validação visual das superfícies (responsável: leo)
+
+Inspeção visual executada no navegador com Vite dev server e backend ativo:
+- Validados `neutral-light` (tokens `--pi-bg: #ffffff`, `--pi-surface: #f8f9fa`, `--pi-border: #e5e7eb`, `--pi-text: #111827`, `--pi-accent: #111827`) e `neutral-dark` (`--pi-bg: #0d0e11`, `--pi-surface: #16181d`, `--pi-border: #2b2f38`, `--pi-text: #e4e7eb`).
+- Shell, navegação lateral, chat com blocos de código e a Bancada (`DockviewWorkbenchPanel` com abas Terminal, Files e Diff) renderizados e integrados sob ambos os temas neutros com alto contraste e legibilidade.
+- Status atualizado para `resolved`, liberando o bloqueio para a issue 28.
