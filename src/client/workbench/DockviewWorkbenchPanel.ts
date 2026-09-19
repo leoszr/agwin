@@ -13,7 +13,7 @@ export class DockviewWorkbenchPanel extends LitElement {
   @query(".workbench-host") private workbenchHost?: HTMLElement;
 
   private workbench?: DockviewWorkbench | undefined;
-
+  private resizeObserver: ResizeObserver | undefined;
   static override styles = css`
     :host {
       display: flex;
@@ -40,6 +40,8 @@ export class DockviewWorkbenchPanel extends LitElement {
   `;
 
   override disconnectedCallback(): void {
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = undefined;
     this.workbench?.dispose();
     this.workbench = undefined;
     super.disconnectedCallback();
@@ -124,26 +126,58 @@ export class DockviewWorkbenchPanel extends LitElement {
         }
       : undefined;
 
-    workbench.addTerminalPanel({
-      id: "workbench-term-main",
-      context: wsContext,
-      panelContext: terminalPanelContext,
-      renderPanel: renderTerminalPanel,
-    });
+    // Tenta restaurar o layout salvo (placeholders para contextos indisponíveis,
+    // sem retargeting); inválido ou ausente cai para a composição padrão.
+    let restored = false;
+    try {
+      restored = workbench.restoreSavedLayout({
+        ...(fileService !== undefined ? { fileService } : {}),
+        ...(diffService !== undefined ? { diffService } : {}),
+        ...(terminalPanelContext !== undefined ? { terminalPanelContext } : {}),
+        ...(renderTerminalPanel !== undefined ? { renderTerminalPanel } : {}),
+        isContextAvailable: (ctx) => ctx.environmentId === wsContext.environmentId,
+      });
+    } catch {
+      // Layout inválido: cai para a composição padrão abaixo.
+    }
+    if (!restored) {
+      workbench.addTerminalPanel({
+        id: "workbench-term-main",
+        context: wsContext,
+        panelContext: terminalPanelContext,
+        renderPanel: renderTerminalPanel,
+      });
 
-    workbench.addFilesPanel({
-      id: "workbench-files-main",
-      context: wsContext,
-      mode: "following",
-      fileService,
-    });
+      workbench.addFilesPanel({
+        id: "workbench-files-main",
+        context: wsContext,
+        mode: "following",
+        fileService,
+      });
 
-    workbench.addDiffPanel({
-      id: "workbench-diff-main",
-      context: wsContext,
-      mode: "following",
-      diffService,
+      workbench.addDiffPanel({
+        id: "workbench-diff-main",
+        context: wsContext,
+        mode: "following",
+        diffService,
+      });
+    }
+    this.observeContainerWidth(container);
+  }
+
+  private observeContainerWidth(container: HTMLElement): void {
+    this.resizeObserver?.disconnect();
+    if (typeof ResizeObserver === "undefined") return;
+    this.resizeObserver = new ResizeObserver((entries) => {
+      const width = entries[entries.length - 1]?.contentRect.width;
+      if (typeof width === "number") this.workbench?.handleContainerWidth(width);
     });
+    this.resizeObserver.observe(container);
+  }
+
+  /** Recompõe a geometria padrão sem apagar rascunhos, buffers ou processos. */
+  resetLayout(): void {
+    this.workbench?.resetToDefaultLayout();
   }
 
   getWorkbench(): DockviewWorkbench | undefined {
