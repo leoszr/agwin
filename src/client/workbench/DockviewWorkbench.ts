@@ -1,5 +1,6 @@
 import { createDockview, type DockviewApi, type IContentRenderer, type SerializedDockview } from "dockview-core";
 import { WorkbenchPanelRegistry, type IWorkbenchPanelInstance } from "./panelRegistry.js";
+import { THEME_TOKENS } from "../src/theme.js";
 import {
   environmentWorkspaceKey,
   loadWorkbenchLayoutFromStorage,
@@ -22,6 +23,108 @@ import {
   type TerminalPanelRender,
 } from "./TerminalDockviewPanel.js";
 import { resolveAppUrl } from "../src/appUrl.js";
+
+
+/**
+ * Shared workbench chrome: Dockview adapter (--dv-* maps to --pi-*) plus the
+ * neutral panel chrome. Applied to the shadow-tree shell and mirrored into
+ * popout documents so both follow the active theme.
+ */
+export const WORKBENCH_CHROME_CSS = `
+.workbench-host, .workbench-popout-theme {
+  --dv-group-view-background-color: var(--pi-bg);
+  --dv-tabs-and-actions-container-background-color: var(--pi-surface);
+  --dv-activegroup-visiblepanel-tab-background-color: var(--pi-surface);
+  --dv-activegroup-visiblepanel-tab-color: var(--pi-text);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--pi-surface);
+  --dv-activegroup-hiddenpanel-tab-color: var(--pi-text-secondary);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--pi-surface);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--pi-text-secondary);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--pi-bg);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--pi-muted);
+  --dv-tab-divider-color: var(--pi-border-muted);
+  --dv-separator-border: var(--pi-border-muted);
+  --dv-sash-color: var(--pi-border-muted);
+  --dv-paneview-header-border-color: var(--pi-border-muted);
+  --dv-paneview-active-outline-color: var(--pi-accent);
+  --dv-floating-group-border: var(--pi-border);
+  --dv-floating-box-shadow: var(--pi-shadow-strong);
+  --dv-scrollbar-background-color: var(--pi-border-muted);
+  --dv-icon-hover-background-color: var(--pi-surface-hover);
+  --dv-drag-over-background-color: var(--pi-surface-hover);
+  --dv-drag-over-border-color: var(--pi-accent-border);
+}
+.files-panel-header, .diff-panel-header, .chat-header {
+  background: var(--pi-surface);
+  color: var(--pi-text-secondary);
+  border-bottom: 1px solid var(--pi-border-muted);
+  padding: 6px 10px;
+  font: 12px system-ui, sans-serif;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.files-list, .diff-file-list, .chat-transcript {
+  margin: 0;
+  padding: 4px;
+  background: var(--pi-bg);
+  color: var(--pi-text);
+}
+.files-list { list-style: none; }
+.files-list li, .diff-file-item, .chat-message {
+  padding: 5px 8px;
+  border-radius: 6px;
+  border-left: 2px solid transparent;
+}
+.files-list li.selected, .diff-file-item.selected {
+  background: var(--pi-surface-hover);
+  border-left-color: var(--pi-text-secondary);
+  color: var(--pi-text-bright);
+}
+.diff-viewer {
+  margin: 4px;
+  padding: 8px;
+  border: 1px solid var(--pi-border-muted);
+  border-radius: 6px;
+  background: var(--pi-bg);
+  color: var(--pi-text-secondary);
+  overflow: auto;
+}
+.chat-composer { display: flex; gap: 6px; padding: 6px; border-top: 1px solid var(--pi-border-muted); background: var(--pi-surface); }
+.chat-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--pi-border);
+  border-radius: 6px;
+  background: var(--pi-bg);
+  color: var(--pi-text);
+  padding: 6px 8px;
+  font: 13px system-ui, sans-serif;
+}
+.chat-composer button {
+  border: 1px solid var(--pi-border);
+  border-radius: 6px;
+  background: var(--pi-surface-hover);
+  color: var(--pi-text);
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.terminal-panel-unavailable {
+  padding: 24px;
+  color: var(--pi-muted);
+  text-align: center;
+}
+:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) {
+  .workbench-host *, .workbench-popout-theme * { transition: none !important; animation: none !important; }
+}
+`;
+/** Re-run `onChange` whenever the active theme changes on the source root. */
+export function observeDocumentTheme(source: Element, onChange: () => void): () => void {
+  const observer = new MutationObserver(() => { onChange(); });
+  observer.observe(source, { attributes: true, attributeFilter: ["style", "data-pi-web-theme"] });
+  return () => { observer.disconnect(); };
+}
 
 export interface DockviewWorkbenchOptions {
   container: HTMLElement;
@@ -493,8 +596,40 @@ export class DockviewWorkbench {
       const popout = popouts[popouts.length - 1];
       const targetDoc = popout?.window.document;
       this.registry.getPanelInstance(panelId)?.setPopout?.(true, targetDoc);
+      this.mirrorThemeToPopouts();
     }
     return success;
+  }
+
+  /** Re-apply the active theme vars and chrome CSS to every open popout. */
+  mirrorThemeToPopouts(): void {
+    for (const popout of this.api.getPopouts()) {
+      try {
+        this.mirrorThemeToDocument(popout.window.document);
+      } catch {
+        // A closed or unreachable popout keeps no theme; nothing to mirror.
+      }
+    }
+  }
+
+  /** Copy the active theme into a popout document (vars plus chrome CSS). */
+  mirrorThemeToDocument(targetDoc: Document): void {
+    const sourceRoot = this.options.container.ownerDocument.documentElement;
+    const targetRoot = targetDoc.documentElement;
+    const computed = sourceRoot.ownerDocument.defaultView?.getComputedStyle(sourceRoot);
+    for (const token of THEME_TOKENS) {
+      const value = (computed?.getPropertyValue(token) ?? sourceRoot.style.getPropertyValue(token)).trim();
+      if (value !== "") targetRoot.style.setProperty(token, value);
+    }
+    const colorScheme = sourceRoot.style.colorScheme;
+    if (colorScheme !== "") targetRoot.style.colorScheme = colorScheme;
+    if (targetDoc.getElementById("pi-workbench-chrome") === null) {
+      targetRoot.classList.add("workbench-popout-theme");
+      const style = targetDoc.createElement("style");
+      style.id = "pi-workbench-chrome";
+      style.textContent = WORKBENCH_CHROME_CSS;
+      targetDoc.head.appendChild(style);
+    }
   }
 
   hidePanel(panelId: string): boolean {

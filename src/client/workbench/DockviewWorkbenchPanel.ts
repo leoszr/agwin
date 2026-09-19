@@ -1,11 +1,10 @@
-import { css, html, LitElement } from "lit";
+import { css, html, LitElement, unsafeCSS } from "lit";
 import { property, query } from "lit/decorators.js";
-import { DockviewWorkbench } from "./DockviewWorkbench.js";
+import { DockviewWorkbench, observeDocumentTheme, WORKBENCH_CHROME_CSS } from "./DockviewWorkbench.js";
 import type { TerminalPanelRender } from "./TerminalDockviewPanel.js";
 import { createGitDiffService, type DiffService } from "./DiffDockviewPanel.js";
 import type { WorkspaceContext } from "./types.js";
 import type { WorkspacePanelContext, WorkspacePluginBinding } from "../src/plugins/types.js";
-
 export class DockviewWorkbenchPanel extends LitElement {
   @property({ attribute: false }) context: WorkspacePanelContext | undefined;
   @property({ attribute: false }) terminalPanelRender: TerminalPanelRender | undefined;
@@ -14,7 +13,8 @@ export class DockviewWorkbenchPanel extends LitElement {
 
   private workbench?: DockviewWorkbench | undefined;
   private resizeObserver: ResizeObserver | undefined;
-  static override styles = css`
+  private disconnectThemeObserver: (() => void) | undefined;
+  static override styles = [css`
     :host {
       display: flex;
       flex-direction: column;
@@ -37,11 +37,22 @@ export class DockviewWorkbenchPanel extends LitElement {
       color: var(--pi-muted, #8b949e);
       text-align: center;
     }
-  `;
+  `, unsafeCSS(WORKBENCH_CHROME_CSS)];
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    if (typeof document !== "undefined" && this.disconnectThemeObserver === undefined) {
+      this.disconnectThemeObserver = observeDocumentTheme(document.documentElement, () => {
+        this.workbench?.mirrorThemeToPopouts();
+      });
+    }
+  }
 
   override disconnectedCallback(): void {
     this.resizeObserver?.disconnect();
     this.resizeObserver = undefined;
+    this.disconnectThemeObserver?.();
+    this.disconnectThemeObserver = undefined;
     this.workbench?.dispose();
     this.workbench = undefined;
     super.disconnectedCallback();

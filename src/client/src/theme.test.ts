@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CLASSIC_THEME_ID, DEFAULT_THEME_PREFERENCE, findThemePairForTheme, resolveThemePreference } from "./theme";
+import { CLASSIC_THEME_ID, DEFAULT_THEME_PREFERENCE, findThemePairForTheme, isValidThemeTokenValue, resolveThemePreference, themeContrastRatio } from "./theme";
 import type { QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, ThemeColorScheme, ThemeTokens } from "./plugins/types";
 
 const tokens = {
@@ -17,6 +17,7 @@ const tokens = {
   "--pi-dim": "#000000",
   "--pi-accent": "#000000",
   "--pi-accent-border": "#000000",
+  "--pi-accent-contrast": "#000000",
   "--pi-selection-bg": "#000000",
   "--pi-success": "#000000",
   "--pi-success-border": "#000000",
@@ -41,12 +42,22 @@ const tokens = {
 } satisfies ThemeTokens;
 
 const themes = [
+  theme("neutral-dark", "Neutral Dark", "dark"),
+  theme("neutral-light", "Neutral Light", "light"),
   theme("pi-web-dark", "PI WEB Dark", "dark"),
   theme("pi-web-light", "PI WEB Light", "light"),
   theme("classic", "PI WEB Classic", "dark"),
 ];
 
 const themePairs: QualifiedThemePairContribution[] = [
+  {
+    id: "themes:neutral",
+    pluginId: "themes",
+    localId: "neutral",
+    name: "Neutral",
+    light: "themes:neutral-light",
+    dark: "themes:neutral-dark",
+  },
   {
     id: "themes:pi-web",
     pluginId: "themes",
@@ -58,14 +69,14 @@ const themePairs: QualifiedThemePairContribution[] = [
 ];
 
 describe("resolveThemePreference", () => {
-  it("resolves the default auto preference to the dark member when the system is dark", () => {
+  it("resolves the default auto preference to the neutral dark member when the system is dark", () => {
     expect(resolveThemePreference({ themes, themePairs, preference: DEFAULT_THEME_PREFERENCE, prefersLight: false }).activeTheme?.id)
-      .toBe("themes:pi-web-dark");
+      .toBe("themes:neutral-dark");
   });
 
-  it("resolves the default auto preference to the light member when the system is light", () => {
+  it("resolves the default auto preference to the neutral light member when the system is light", () => {
     expect(resolveThemePreference({ themes, themePairs, preference: DEFAULT_THEME_PREFERENCE, prefersLight: true }).activeTheme?.id)
-      .toBe("themes:pi-web-light");
+      .toBe("themes:neutral-light");
   });
 
   it("keeps an unpaired theme selected when auto is enabled", () => {
@@ -126,3 +137,26 @@ function theme(localId: string, name: string, colorScheme: ThemeColorScheme): Qu
     tokens,
   };
 }
+
+describe("isValidThemeTokenValue", () => {
+  it("accepts hex, rgb, hsl, and named colors but rejects rules, scripts, and bare words", () => {
+    expect(isValidThemeTokenValue("#fff")).toBe(true);
+    expect(isValidThemeTokenValue("#0d0e11")).toBe(true);
+    expect(isValidThemeTokenValue("#0008")).toBe(true);
+    expect(isValidThemeTokenValue("rgb(1, 2, 3)")).toBe(true);
+    expect(isValidThemeTokenValue("hsla(0, 0%, 100%, 0.5)")).toBe(true);
+    expect(isValidThemeTokenValue("transparent")).toBe(true);
+    expect(isValidThemeTokenValue("hello")).toBe(false);
+    expect(isValidThemeTokenValue("")).toBe(false);
+    expect(isValidThemeTokenValue("150ms")).toBe(false);
+    expect(isValidThemeTokenValue("#12345")).toBe(false);
+    expect(isValidThemeTokenValue("expression(alert(1))")).toBe(false);
+  });
+});
+
+describe("themeContrastRatio", () => {
+  it("computes WCAG relative-luminance ratios with black on white at 21:1", () => {
+    expect(themeContrastRatio("#000000", "#ffffff")).toBeCloseTo(21, 1);
+    expect(themeContrastRatio("#ffffff", "#ffffff")).toBeCloseTo(1, 3);
+  });
+});

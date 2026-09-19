@@ -7,6 +7,7 @@ import { machineScopedPluginId } from "../../../shared/machinePluginIds";
 import { corePlugin } from "./core";
 import { PluginRegistry, installWorkspaceLabelScope, installWorkspacePanelScope } from "./registry";
 import { themePackPlugin } from "./themes";
+import { themeContrastRatio } from "../theme";
 import type { PiWebPlugin, PluginRuntimeContext, QualifiedContributionId, ThemeTokens, WorkspaceFiles, WorkspaceHost, WorkspaceInvalidation, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelContribution, WorkspacePluginBinding } from "./types";
 import { createPairedPluginWorkspaceBackend } from "./workspaceBackend";
 import type { PluginBackendRequestTarget } from "../api/pluginBackends";
@@ -731,13 +732,107 @@ describe("PluginRegistry", () => {
     registry.register({ id: "themes", plugin: themePackPlugin });
 
     expect(registry.getThemes().map((theme) => ({ id: theme.id, colorScheme: theme.colorScheme }))).toEqual([
+      { id: "themes:neutral-dark", colorScheme: "dark" },
+      { id: "themes:neutral-light", colorScheme: "light" },
       { id: "themes:pi-web-dark", colorScheme: "dark" },
       { id: "themes:pi-web-light", colorScheme: "light" },
       { id: "themes:classic", colorScheme: "dark" },
     ]);
     expect(registry.getThemePairs().map((pair) => ({ id: pair.id, light: pair.light, dark: pair.dark }))).toEqual([
+      { id: "themes:neutral", light: "themes:neutral-light", dark: "themes:neutral-dark" },
       { id: "themes:pi-web", light: "themes:pi-web-light", dark: "themes:pi-web-dark" },
     ]);
+  });
+
+  it("keeps neutral theme text, focus, and terminal pairs at WCAG 2.2 AA contrast", () => {
+    const registry = new PluginRegistry();
+    registry.register({ id: "themes", plugin: themePackPlugin });
+    const byId = new Map(registry.getThemes().map((theme) => [theme.id, theme.tokens]));
+
+    const dark = byId.get("themes:neutral-dark");
+    const light = byId.get("themes:neutral-light");
+    if (dark === undefined || light === undefined) throw new Error("Neutral themes were not registered");
+    for (const tokens of [dark, light]) {
+      const pairs: [string, string][] = [
+        [tokens["--pi-text"], tokens["--pi-bg"]],
+        [tokens["--pi-text-secondary"], tokens["--pi-bg"]],
+        [tokens["--pi-accent"], tokens["--pi-bg"]],
+        [tokens["--pi-accent-contrast"], tokens["--pi-accent"]],
+        [tokens["--pi-terminal-text"], tokens["--pi-terminal-bg"]],
+      ];
+      for (const [foreground, background] of pairs) {
+        expect(themeContrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it("rejects invalid theme contributions wholly with a diagnostic while keeping valid siblings", () => {
+    const warnings: unknown[][] = [];
+    const warn = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => { warnings.push(args); });
+    try {
+      const registry = new PluginRegistry();
+      const validTokens = testThemeTokens();
+      // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- intentional malformed plugin contribution exercising the runtime boundary.
+      const missingToken = { ...validTokens } as Record<string, string>;
+      delete missingToken["--pi-bg"];
+      registry.register({
+        id: "example",
+        plugin: {
+          apiVersion: 2,
+          name: "Example",
+          activate: () => ({
+            contributions: {
+              themes: [
+                { id: "good", name: "Good", order: 10, colorScheme: "dark", tokens: validTokens },
+                // @ts-expect-error -- intentional incomplete token map exercising the runtime boundary.
+                { id: "missing-token", name: "Missing", order: 11, colorScheme: "dark", tokens: missingToken },
+                { id: "bad-value", name: "Bad", order: 12, colorScheme: "dark", tokens: { ...validTokens, "--pi-bg": "hello" } },
+                // @ts-expect-error -- intentional unknown token exercising the runtime boundary.
+                { id: "unknown-token", name: "Unknown", order: 13, colorScheme: "dark", tokens: { ...validTokens, "--pi-evil": "#000" } },
+                // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- intentional malformed plugin contribution exercising the runtime boundary.
+                { id: "bad-scheme", name: "Scheme", order: 14, colorScheme: "sepia" as "dark", tokens: validTokens },
+              ],
+            },
+          }),
+        },
+      });
+
+      expect(registry.getThemes().map((theme) => theme.id)).toEqual(["example:good"]);
+      expect(warnings.length).toBe(4);
+      expect(warnings.every((args) => String(args[0]).includes("Skipping invalid PI WEB theme"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("skips theme pairs referencing unknown themes with a diagnostic", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const registry = new PluginRegistry();
+      registry.register({
+        id: "example",
+        plugin: {
+          apiVersion: 2,
+          name: "Example",
+          activate: () => ({
+            contributions: {
+              themes: [
+                { id: "only", name: "Only", order: 10, colorScheme: "dark", tokens: testThemeTokens() },
+              ],
+              themePairs: [
+                { id: "dangling", name: "Dangling", light: "only", dark: "missing" },
+              ],
+            },
+          }),
+        },
+      });
+
+      expect(registry.getThemePairs()).toEqual([]);
+      expect(warn).toHaveBeenCalledOnce();
+      expect(String(warn.mock.calls[0]?.[0])).toContain("Skipping invalid PI WEB theme pair");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("collects theme contributions in contribution order", () => {
@@ -1272,6 +1367,7 @@ function testThemeTokens(): ThemeTokens {
     "--pi-dim": "#000000",
     "--pi-accent": "#000000",
     "--pi-accent-border": "#000000",
+    "--pi-accent-contrast": "#000000",
     "--pi-selection-bg": "#000000",
     "--pi-success": "#000000",
     "--pi-success-border": "#000000",

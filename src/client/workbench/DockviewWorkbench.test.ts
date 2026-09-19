@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DockviewWorkbench } from "./DockviewWorkbench";
+import type { PopoutGroup } from "dockview-core";
+import { DockviewWorkbench, observeDocumentTheme } from "./DockviewWorkbench";
 import { DiffDockviewPanel, type DiffService } from "./DiffDockviewPanel";
 import { PlaceholderDockviewPanel } from "./PlaceholderDockviewPanel";
 import { TerminalDockviewPanel } from "./TerminalDockviewPanel";
@@ -285,5 +286,75 @@ describe("DockviewWorkbench Layout Persistence (Ticket 26)", () => {
     }
     expect(revived.state.context.environmentId).toBe("remote-1");
     restored.dispose();
+  });
+});
+
+describe("DockviewWorkbench Theme Adapters (Ticket 27)", () => {
+  const wsLocal: WorkspaceContext = { environmentId: "local", workspaceId: "ws-main", cwd: "/home/user/app" };
+
+  afterEach(() => {
+    document.body.replaceChildren();
+    document.documentElement.removeAttribute("style");
+    localStorage.clear();
+  });
+
+  it("mirrors the active theme vars and chrome CSS into a popout document", () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    document.documentElement.style.setProperty("--pi-bg", "#0d0e11");
+    document.documentElement.style.setProperty("--pi-text", "#e4e7eb");
+    document.documentElement.style.colorScheme = "dark";
+    const workbench = new DockviewWorkbench({ container: host, initialContext: wsLocal });
+
+    const popoutDoc = document.implementation.createHTMLDocument("Popout");
+    workbench.mirrorThemeToDocument(popoutDoc);
+
+    expect(popoutDoc.documentElement.style.getPropertyValue("--pi-bg")).toBe("#0d0e11");
+    expect(popoutDoc.documentElement.style.getPropertyValue("--pi-text")).toBe("#e4e7eb");
+    expect(popoutDoc.documentElement.style.colorScheme).toBe("dark");
+    const injected = popoutDoc.getElementById("pi-workbench-chrome");
+    expect(injected?.textContent).toContain("--dv-group-view-background-color");
+    expect(injected?.textContent).toContain(":focus-visible");
+
+    workbench.mirrorThemeToDocument(popoutDoc);
+    expect(popoutDoc.querySelectorAll("#pi-workbench-chrome").length).toBe(1);
+    workbench.dispose();
+  });
+
+  it("re-applies the active theme to every open popout", () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    document.documentElement.style.setProperty("--pi-surface", "#16181d");
+    const workbench = new DockviewWorkbench({ container: host, initialContext: wsLocal });
+
+    const first = document.implementation.createHTMLDocument("Popout 1");
+    const second = document.implementation.createHTMLDocument("Popout 2");
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal structural double; only window.document is read under test.
+    const popouts = [
+      { window: { document: first, close: () => undefined } },
+      { window: { document: second, close: () => undefined } },
+    ] as unknown as PopoutGroup[];
+    vi.spyOn(workbench.api, "getPopouts").mockReturnValue(popouts);
+    workbench.mirrorThemeToPopouts();
+
+    expect(first.documentElement.style.getPropertyValue("--pi-surface")).toBe("#16181d");
+    expect(second.documentElement.style.getPropertyValue("--pi-surface")).toBe("#16181d");
+    workbench.dispose();
+  });
+
+  it("notifies popouts when the active theme changes on the document root", async () => {
+    const seen: string[] = [];
+    const disconnect = observeDocumentTheme(document.documentElement, () => {
+      seen.push(document.documentElement.style.getPropertyValue("--pi-bg"));
+    });
+
+    document.documentElement.style.setProperty("--pi-bg", "#ffffff");
+    await Promise.resolve();
+    expect(seen).toEqual(["#ffffff"]);
+
+    disconnect();
+    document.documentElement.style.setProperty("--pi-bg", "#000000");
+    await Promise.resolve();
+    expect(seen).toEqual(["#ffffff"]);
   });
 });

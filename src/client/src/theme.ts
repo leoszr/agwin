@@ -21,7 +21,7 @@ export interface ThemePreferenceResolution {
 }
 
 export const CLASSIC_THEME_ID: QualifiedContributionId = "themes:classic";
-export const DEFAULT_THEME_ID: QualifiedContributionId = "themes:pi-web-dark";
+export const DEFAULT_THEME_ID: QualifiedContributionId = "themes:neutral-dark";
 export const DEFAULT_THEME_PREFERENCE: ThemePreference = { themeId: DEFAULT_THEME_ID, auto: true };
 export const THEME_STORAGE_KEY = "pi-web-app-theme";
 
@@ -40,6 +40,7 @@ export const THEME_TOKENS: ThemeToken[] = [
   "--pi-dim",
   "--pi-accent",
   "--pi-accent-border",
+  "--pi-accent-contrast",
   "--pi-selection-bg",
   "--pi-success",
   "--pi-success-border",
@@ -140,4 +141,52 @@ function isUnknownRecord(value: unknown): value is Record<string, unknown> {
 
 function isQualifiedContributionId(value: unknown): value is QualifiedContributionId {
   return typeof value === "string" && qualifiedContributionIdPattern.test(value);
+}
+
+const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{3}$|^#[0-9a-fA-F]{4}$|^#[0-9a-fA-F]{6}$|^#[0-9a-fA-F]{8}$/;
+const RGB_COLOR_PATTERN = /^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(,\s*(0|1|0?\.\d+)\s*)?\)$/;
+const HSL_COLOR_PATTERN = /^hsla?\(\s*\d{1,3}\s*,\s*\d{1,3}%\s*,\s*\d{1,3}%\s*(,\s*(0|1|0?\.\d+)\s*)?\)$/;
+// Bare keywords: only real CSS color keywords, never arbitrary words.
+const NAMED_THEME_COLORS = new Set([
+  "transparent",
+  "currentcolor",
+  "black",
+  "white",
+  "red",
+  "green",
+  "blue",
+  "yellow",
+  "cyan",
+  "magenta",
+  "gray",
+  "grey",
+]);
+
+/** Shape check for theme token values: themes carry colors, never rules or scripts. */
+export function isValidThemeTokenValue(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed === "") return false;
+  return (
+    HEX_COLOR_PATTERN.test(trimmed) ||
+    RGB_COLOR_PATTERN.test(trimmed) ||
+    HSL_COLOR_PATTERN.test(trimmed) ||
+    NAMED_THEME_COLORS.has(trimmed.toLowerCase())
+  );
+}
+
+/** WCAG 2.2 relative-luminance contrast ratio for two 6-digit hex colors. */
+export function themeContrastRatio(foreground: string, background: string): number {
+  const lighter = Math.max(themeLuminance(foreground), themeLuminance(background));
+  const darker = Math.min(themeLuminance(foreground), themeLuminance(background));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function themeLuminance(hex: string): number {
+  const clean = hex.replace("#", "");
+  const full = clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean;
+  const num = parseInt(full, 16);
+  const [r, g, b] = [((num >> 16) & 255) / 255, ((num >> 8) & 255) / 255, (num & 255) / 255].map((channel) =>
+    channel <= 0.03928 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4),
+  );
+  return 0.2126 * (r ?? 0) + 0.7152 * (g ?? 0) + 0.0722 * (b ?? 0);
 }

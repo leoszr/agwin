@@ -363,6 +363,7 @@ export type ThemeToken =
   | "--pi-dim"
   | "--pi-accent"
   | "--pi-accent-border"
+  | "--pi-accent-contrast"
   | "--pi-selection-bg"
   | "--pi-success"
   | "--pi-success-border"

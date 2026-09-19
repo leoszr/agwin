@@ -1,5 +1,6 @@
 import { html, svg } from "lit";
 import { requirePluginBackendRevision } from "../../../shared/pluginBackendProtocol";
+import { THEME_TOKENS, isValidThemeTokenValue } from "../theme.js";
 import type { PiWebPluginRegistration, PluginAction, PluginActivationResult, PluginRuntimeContext, QualifiedContributionId, QualifiedPluginAction, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspaceLabelContribution, QualifiedWorkspacePanelContribution, ThemeContribution, ThemePairContribution, WorkspaceInvalidation, WorkspaceLabelContext, WorkspaceLabelContribution, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelContribution, WorkspacePluginBinding, WorkspaceResource } from "./types";
 
 const idPattern = /^[a-z][a-z0-9.-]*$/u;
@@ -83,11 +84,12 @@ export class PluginRegistry {
       const actions = (contributions.actions ?? []).map((action) => this.qualifyAction(runtimePluginId, action, registration.machineId, registration.sourcePluginId, contributionIds));
       const workspacePanels = (contributions.workspacePanels ?? []).map((panel) => this.qualifyWorkspacePanel(runtimePluginId, panel, registration.machineId, registration.sourcePluginId, backendRevision, pairedRequestVersion, pairedChannelVersion, contributionIds));
       const workspaceLabels = (contributions.workspaceLabels ?? []).map((contribution) => this.qualifyWorkspaceLabelContribution(runtimePluginId, contribution, registration.machineId, registration.sourcePluginId, backendRevision, pairedRequestVersion, pairedChannelVersion, contributionIds));
+      const themeIdByLocalId = new Map<string, QualifiedContributionId>();
       const themes = registration.machineId === undefined
-        ? (contributions.themes ?? []).map((theme) => this.qualifyTheme(runtimePluginId, theme, contributionIds))
+        ? (contributions.themes ?? []).flatMap((theme) => this.qualifyThemeOrSkip(runtimePluginId, theme, contributionIds, themeIdByLocalId))
         : [];
       const themePairs = registration.machineId === undefined
-        ? (contributions.themePairs ?? []).map((pair) => this.qualifyThemePair(runtimePluginId, pair, contributionIds))
+        ? (contributions.themePairs ?? []).flatMap((pair) => this.qualifyThemePairOrSkip(runtimePluginId, pair, contributionIds, themeIdByLocalId))
         : [];
 
       this.pluginIds.add(runtimePluginId);
@@ -297,22 +299,46 @@ export class PluginRegistry {
       items: (context) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) ? items(workspaceLabelContextFor(context, binding)) : [],
     };
   }
-
-  private qualifyTheme(pluginId: string, theme: ThemeContribution, contributionIds: Set<QualifiedContributionId>): QualifiedThemeContribution {
+  private qualifyThemeOrSkip(
+    pluginId: string,
+    theme: ThemeContribution,
+    contributionIds: Set<QualifiedContributionId>,
+    themeIdByLocalId: Map<string, QualifiedContributionId>,
+  ): QualifiedThemeContribution[] {
+    const rejection = themeRejectionReason(theme);
+    if (rejection !== undefined) {
+      console.warn(`Skipping invalid PI WEB theme ${pluginId}:${themeContributionLabel(theme)}: ${rejection}`);
+      return [];
+    }
     const id = this.qualify(pluginId, theme.id, contributionIds);
-    return { ...theme, id, pluginId, localId: theme.id };
+    themeIdByLocalId.set(theme.id, id);
+    return [{ ...theme, id, pluginId, localId: theme.id }];
   }
 
-  private qualifyThemePair(pluginId: string, pair: ThemePairContribution, contributionIds: Set<QualifiedContributionId>): QualifiedThemePairContribution {
+  private qualifyThemePairOrSkip(
+    pluginId: string,
+    pair: ThemePairContribution,
+    contributionIds: Set<QualifiedContributionId>,
+    themeIdByLocalId: Map<string, QualifiedContributionId>,
+  ): QualifiedThemePairContribution[] {
     const id = this.qualify(pluginId, pair.id, contributionIds);
-    return {
+    const light = themeIdByLocalId.get(pair.light);
+    const dark = themeIdByLocalId.get(pair.dark);
+    if (typeof pair.name !== "string" || pair.name.trim() === "" || light === undefined || dark === undefined) {
+      console.warn(
+        `Skipping invalid PI WEB theme pair ${id}: ` +
+          (typeof pair.name !== "string" || pair.name.trim() === "" ? "missing name" : `unknown theme reference '${light === undefined ? pair.light : pair.dark}'`),
+      );
+      return [];
+    }
+    return [{
       ...pair,
       id,
       pluginId,
       localId: pair.id,
-      light: this.qualifyReference(pluginId, pair.light),
-      dark: this.qualifyReference(pluginId, pair.dark),
-    };
+      light,
+      dark,
+    }];
   }
 
   private qualify(pluginId: string, localId: string, contributionIds: Set<QualifiedContributionId>): QualifiedContributionId {
@@ -494,6 +520,44 @@ function addMappedSetValue(map: Map<string, Set<string>>, key: string, value: st
 
 function isUnknownArray(value: unknown): value is unknown[] {
   return Array.isArray(value);
+}
+
+const THEME_TOKEN_SET: ReadonlySet<string> = new Set(THEME_TOKENS);
+
+function themeContributionLabel(theme: unknown): string {
+  if (typeof theme === "object" && theme !== null && "id" in theme) {
+    return typeof theme.id === "string" && theme.id !== "" ? theme.id : "?";
+  }
+  return "?";
+}
+
+function unknownRecordEntries(value: unknown): [string, unknown][] | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  return Object.entries(value).map(([entryKey, entryValue]): [string, unknown] => [entryKey, entryValue]);
+}
+
+function themeRejectionReason(candidate: unknown): string | undefined {
+  if (typeof candidate !== "object" || candidate === null) return "theme is not an object";
+  if (!("name" in candidate) || typeof candidate.name !== "string" || candidate.name.trim() === "") {
+    return "missing name";
+  }
+  if (!("colorScheme" in candidate) || (candidate.colorScheme !== "dark" && candidate.colorScheme !== "light")) {
+    return `invalid colorScheme ${"colorScheme" in candidate ? formatUnknownValue(candidate.colorScheme) : "missing"}`;
+  }
+  const entries = "tokens" in candidate ? unknownRecordEntries(candidate.tokens) : undefined;
+  if (entries === undefined) return "missing tokens map";
+  const provided = new Map(entries);
+  for (const token of THEME_TOKENS) {
+    const value = provided.get(token);
+    if (typeof value !== "string" || value.trim() === "") return `missing token ${token}`;
+  }
+  for (const [token, value] of provided) {
+    if (!THEME_TOKEN_SET.has(token)) return `unknown token ${token}`;
+    if (typeof value !== "string" || !isValidThemeTokenValue(value)) {
+      return `invalid value for token ${token}: ${formatUnknownValue(value)}`;
+    }
+  }
+  return undefined;
 }
 
 function isQualifiedContributionId(value: string): value is QualifiedContributionId {
