@@ -8,6 +8,7 @@ import { MachineList } from "../MachineList";
 import { MachineSwitcher } from "../MachineSwitcher";
 import { ProjectList } from "../ProjectList";
 import { WorkspaceList } from "../WorkspaceList";
+import { ProjectExplorerView } from "../ProjectExplorerView";
 import { AppNavigationPanel, shouldShowMachinesSection } from "./AppNavigationPanel";
 
 afterEach(() => {
@@ -78,6 +79,14 @@ describe("machine status wiring", () => {
     expect(section(panel, "workspace-list", WorkspaceList).statusSnapshot).toBeUndefined();
   });
 });
+describe("project explorer integration", () => {
+  it("mounts project-explorer-view and forwards project and workspace data", async () => {
+    const panel = await mountPanel({}, machine("local"));
+    const explorerView = panel.shadowRoot?.querySelector("project-explorer-view");
+    expect(explorerView).toBeInstanceOf(ProjectExplorerView);
+  });
+});
+
 
 async function mountPanel(machineStatusSnapshots: Record<string, MachineStatusSnapshot>, selectedMachine: Machine | undefined): Promise<AppNavigationPanel> {
   const panel = new AppNavigationPanel();

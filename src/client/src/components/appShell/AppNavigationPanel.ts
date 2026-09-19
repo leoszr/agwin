@@ -13,6 +13,7 @@ import "../MachineSwitcher";
 import "../ProjectList";
 import "../WorkspaceList";
 import "../SessionList";
+import "../ProjectExplorerView";
 
 export type NavigationFocusTarget = NavigationSection | "chat";
 
@@ -45,6 +46,7 @@ export class AppNavigationPanel extends LitElement {
   @property({ type: Boolean }) projectsCollapsed = false;
   @property({ type: Boolean }) workspacesCollapsed = false;
   @property({ type: Boolean }) sessionsCollapsed = false;
+  @property({ type: Boolean }) showLegacyLists = false;
   @property({ type: Number }) startingSessionCount = 0;
   @property({ type: Boolean }) canStartSession = false;
   @property({ attribute: false }) onShowActions?: () => void;
@@ -129,6 +131,45 @@ export class AppNavigationPanel extends LitElement {
           .onCancelKeyboardNavigation=${() => { this.cancelKeyboardNavigation(); }}
         ></machine-list>
       ` : null}
+      <project-explorer-view
+        .projects=${this.projects}
+        .workspaces=${this.workspaces}
+        .sessions=${this.sessions}
+        .selectedSession=${this.selectedSession}
+        .selectedProject=${this.selectedProject}
+        .selectedWorkspace=${this.selectedWorkspace}
+        .selectedMachine=${this.selectedMachine}
+        .machines=${this.machines}
+        .sessionStatuses=${this.sessionStatuses}
+        .sessionActivities=${this.sessionActivities}
+        .sendingPrompts=${this.sendingPrompts}
+        .environmentStatuses=${this.environmentStatuses}
+        .unreadSessionIds=${this.unreadSessionIds}
+        .compact=${this.compact}
+        .onSelectSession=${async (session: SessionInfo, workspace?: Workspace, project?: Project) => {
+          if (project !== undefined && this.selectedProject?.id !== project.id) {
+            await this.onSelectProject?.(project);
+          }
+          if (workspace !== undefined && this.selectedWorkspace?.id !== workspace.id) {
+            await this.onSelectWorkspace?.(workspace);
+          }
+          await this.onSelectSession?.(session);
+        }}
+        .onStartSession=${async (projectId?: string) => {
+          if (projectId !== undefined && projectId !== "") {
+            const project = this.projects.find((p) => p.id === projectId);
+            if (project !== undefined && this.selectedProject?.id !== project.id) {
+              await this.onSelectProject?.(project);
+            }
+            const ws = this.workspaces.find((w) => w.projectId === projectId);
+            if (ws !== undefined && this.selectedWorkspace?.id !== ws.id) {
+              await this.onSelectWorkspace?.(ws);
+            }
+          }
+          await this.onStartSession?.();
+        }}
+      ></project-explorer-view>
+      <div class="legacy-navigation-lists" style=${this.showLegacyLists ? "" : "display: none;"}>
       <project-list
         .projects=${this.projects}
         .selected=${this.selectedProject}
@@ -189,6 +230,7 @@ export class AppNavigationPanel extends LitElement {
         .onFocusNextSection=${() => { this.focusNextFrom("sessions"); }}
         .onCancelKeyboardNavigation=${() => { this.cancelKeyboardNavigation(); }}
       ></session-list>
+      </div>
     `;
   }
 
@@ -224,6 +266,7 @@ export class AppNavigationPanel extends LitElement {
   static override styles = css`
     :host { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
     :host([compact]) { flex: 1 1 auto; }
+    project-explorer-view { flex: 1 1 auto; min-height: 0; }
     header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; border-bottom: 1px solid var(--pi-border); }
     header strong { flex: 0 0 auto; }
     machine-switcher { flex: 1 1 auto; min-width: 0; }

@@ -157,4 +157,73 @@ describe("ProjectExplorer (Ticket 28)", () => {
     item.click();
     expect(onSelectThread).toHaveBeenCalled();
   });
+
+  it("renders a 2-line layout per thread with workspace always visible on line 2", () => {
+    new ProjectExplorer({
+      container,
+      projects,
+      threads,
+      onSelectThread,
+      onCreateThread,
+    });
+
+    const threadItem = container.querySelector<HTMLElement>(".thread-item");
+    if (!threadItem) throw new Error("Missing thread item");
+
+    const line1 = threadItem.querySelector(".thread-line-1");
+    const line2 = threadItem.querySelector(".thread-line-2");
+    expect(line1).not.toBeNull();
+    expect(line2).not.toBeNull();
+
+    expect(line1?.querySelector(".thread-title")?.textContent).toBe("Fix crash on boot");
+    expect(line2?.querySelector(".badge-workspace")?.textContent).toBe("ws-main");
+  });
+
+  it("filters threads and projects by search query across title, workspace and environment", () => {
+    const explorer = new ProjectExplorer({
+      container,
+      projects,
+      threads,
+      onSelectThread,
+      onCreateThread,
+    });
+
+    expect(container.querySelectorAll(".thread-item").length).toBe(3);
+
+    // Search for remote environment
+    explorer.setSearchQuery("remote-aws");
+    const filteredItems = container.querySelectorAll(".thread-item");
+    expect(filteredItems.length).toBe(1);
+    expect(filteredItems[0]?.textContent).toContain("remote-aws");
+
+    // Search for workspace
+    explorer.setSearchQuery("ws-isolated");
+    expect(container.querySelectorAll(".thread-item").length).toBe(1);
+
+    // Search clear
+    explorer.setSearchQuery("");
+    expect(container.querySelectorAll(".thread-item").length).toBe(3);
+  });
+
+  it("toggles expand and collapse on project and bucket headers", () => {
+    new ProjectExplorer({
+      container,
+      projects,
+      threads,
+      onSelectThread,
+      onCreateThread,
+    });
+
+    const projectHeader = container.querySelector<HTMLElement>(".project-header");
+    // Both projects are initially expanded
+    expect(container.querySelectorAll(".project-state-buckets").length).toBe(2);
+
+    // Toggle collapse on first project
+    projectHeader?.click();
+    expect(container.querySelectorAll(".project-state-buckets").length).toBe(1);
+
+    // Toggle expand on first project
+    projectHeader?.click();
+    expect(container.querySelectorAll(".project-state-buckets").length).toBe(2);
+  });
 });

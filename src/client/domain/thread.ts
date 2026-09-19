@@ -12,6 +12,9 @@ export interface Thread {
   parentThreadId?: string | undefined;
   forkedFromSessionSeq?: number | undefined;
   readOnlyTranscriptCache?: unknown[] | undefined;
+  workspaceLabel?: string | undefined;
+  projectName?: string | undefined;
+  unread?: boolean | undefined;
 }
 
 export interface CreateThreadInput {
